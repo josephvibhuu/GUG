@@ -27,6 +27,8 @@ export interface Company {
   sharesBoughtBack: number;
   buybackGoldSpent: number;
   totalDividendsPaid?: number;
+  lastDividendPerShare?: number;
+  dividendYieldPct?: number;
   dividendRate?: number;
   weeklyRevenue?: number;
   treasuryBalance?: number;
@@ -190,7 +192,14 @@ export async function getAllCompanies(): Promise<Company[]> {
                WHERE s.company_id = c.id
                  AND s.type = 'SELL'
                  AND s.status IN ('OPEN', 'PARTIAL')
-             ) as total_active_asks
+             ) as total_active_asks,
+             (
+               SELECT e.dividend_per_share
+               FROM earnings_reports e
+               WHERE e.company_id = c.id AND e.status = 'DISTRIBUTED'
+               ORDER BY COALESCE(e.distributed_at, e.created_at) DESC
+               LIMIT 1
+             ) as last_div_per_share
       FROM companies c
       LEFT JOIN users u ON c.creator_id = u.id
       LEFT JOIN users u2 ON c.co_founder_id = u2.id
@@ -204,6 +213,9 @@ export async function getAllCompanies(): Promise<Company[]> {
     const floatListed = Number(row.ipo_initial ?? row.float_shares ?? 0);
     const sharesRemaining = row.ipo_remaining !== null && row.ipo_remaining !== undefined ? Number(row.ipo_remaining) : 0;
     const sharesSold = Math.max(0, floatListed - sharesRemaining);
+    const curPrice = Number(row.current_price);
+    const lastDivPerShare = row.last_div_per_share !== null && row.last_div_per_share !== undefined ? Number(row.last_div_per_share) : 0;
+    const dividendYieldPct = curPrice > 0 && lastDivPerShare > 0 ? Math.round((lastDivPerShare / curPrice) * 10000) / 100 : 0;
 
     return withDayStats({
       id: String(row.id),
@@ -224,17 +236,19 @@ export async function getAllCompanies(): Promise<Company[]> {
       maxSecondaryPrice: row.max_secondary_price !== null && row.max_secondary_price !== undefined ? Number(row.max_secondary_price) : null,
       totalActiveAsks: Number(row.total_active_asks || 0),
       ipoPrice: Number(row.ipo_price),
-      currentPrice: Number(row.current_price),
+      currentPrice: curPrice,
       change24h: Number(row.change_24h),
       volume24h: Number(row.volume_24h),
       high24h: Number(row.high_24h),
       low24h: Number(row.low_24h),
-      marketCap: Number(row.current_price) * Number(row.total_shares),
+      marketCap: curPrice * Number(row.total_shares),
       logoUrl: String(row.logo_url || "🏢"),
       status: (row.status as any) || "ACTIVE",
       sharesBoughtBack: Number(row.shares_bought_back || 0),
       buybackGoldSpent: Number(row.buyback_gold_spent || 0),
       totalDividendsPaid: Number(row.total_dividends_paid || 0),
+      lastDividendPerShare: lastDivPerShare,
+      dividendYieldPct,
       dividendRate: Number(row.dividend_rate || 50),
       weeklyRevenue: Number(row.weekly_revenue || 0),
       treasuryBalance: Number(row.treasury_balance || 0),
@@ -443,6 +457,36 @@ export async function getRecentTrades(companyId: string, limit = 20): Promise<Tr
     total: Number(r.total),
     type: r.side === "SELL" ? "SELL" : "BUY",
     timestamp: String(r.created_at),
+  }));
+}
+
+export interface FloorTrade {
+  id: string;
+  ticker: string;
+  price: number;
+  quantity: number;
+  total: number;
+  createdAt: string;
+}
+
+export async function getRecentFloorTrades(limit = 8): Promise<FloorTrade[]> {
+  await initDb();
+  const db = getDb();
+  const res = await db.execute({
+    sql: `SELECT t.id, c.ticker, t.price, t.quantity, t.total, t.created_at
+          FROM trades t
+          JOIN companies c ON t.company_id = c.id
+          ORDER BY t.created_at DESC
+          LIMIT ?`,
+    args: [limit],
+  });
+  return res.rows.map((r: any) => ({
+    id: String(r.id),
+    ticker: String(r.ticker),
+    price: Number(r.price),
+    quantity: Number(r.quantity),
+    total: Number(r.total),
+    createdAt: String(r.created_at),
   }));
 }
 

@@ -23,6 +23,7 @@ import {
   Users,
   Bell,
   Newspaper,
+  Trophy,
 } from "lucide-react";
 import WalletModal from "./WalletModal";
 import TermsModal from "./TermsModal";
@@ -115,6 +116,7 @@ function NavbarInner({ onUserRefresh }: { onUserRefresh?: () => void }) {
     { href: "/ipo", label: t("nav.listCompany"), short: t("nav.listShort"), icon: CirclePlus, active: pathname === "/ipo" },
     { href: "/crypto", label: t("nav.crypto"), icon: Coins, active: pathname === "/crypto", soon: true },
     { href: "/funds", label: t("nav.funds"), icon: Landmark, active: pathname === "/funds" },
+    { href: "/leaderboard", label: "Hall of Fame", short: "Ranks", icon: Trophy, active: pathname === "/leaderboard" },
     { href: "/referrals", label: t("nav.referrals"), icon: Users, active: pathname === "/referrals" },
   ];
   const name = user ? (user.displayName || user.username) : "";

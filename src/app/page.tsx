@@ -35,12 +35,22 @@ function useWatchlist() {
   return { starred, toggle };
 }
 
-type SortField = "marketCap" | "currentPrice" | "change24h" | "volume24h" | "weeklyRevenue";
+type SortField = "marketCap" | "currentPrice" | "change24h" | "volume24h" | "weeklyRevenue" | "dividendYieldPct";
+
+function timeAgoShort(iso: string): string {
+  const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  return `${Math.floor(hr / 24)}d`;
+}
 
 export default function HomePage() {
   const router = useRouter();
   const { t } = useI18n();
-  const { loaded, companies, schedule, clockOffset, sparklines } = useMarketFeed();
+  const { loaded, companies, schedule, clockOffset, sparklines, floorTrades } = useMarketFeed();
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortField>("marketCap");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
@@ -91,29 +101,51 @@ export default function HomePage() {
         <FloorStrip schedule={schedule} clockOffset={clockOffset} />
 
         {pulse && (
-          <dl className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-rule border border-rule rounded-[4px] overflow-hidden">
-            <div className="bg-floor px-4 py-3">
-              <dt className="text-[11px] text-ash">Total Market Cap</dt>
-              <dd className="condensed text-[18px] font-bold text-zinc-50 tabular">{fmtCompact(pulse.totalMcap)} gold</dd>
-            </div>
-            <div className="bg-floor px-4 py-3">
-              <dt className="text-[11px] text-ash">24h Floor Volume</dt>
-              <dd className="condensed text-[18px] font-bold text-bullion tabular">{fmtCompact(pulse.totalVol)} gold</dd>
-            </div>
-            <div className="bg-floor px-4 py-3">
-              <dt className="text-[11px] text-ash">Top 24h Mover</dt>
-              <dd className="condensed text-[18px] font-bold tabular">
-                <Link href={`/trade/${pulse.topGainer.ticker}`} className="hover:underline text-zinc-50">
-                  ${pulse.topGainer.ticker}
-                </Link>{" "}
-                <span className={moveColor(pulse.topGainer.change24h)}>{fmtPct(pulse.topGainer.change24h)}</span>
-              </dd>
-            </div>
-            <div className="bg-floor px-4 py-3">
-              <dt className="text-[11px] text-ash">Active Listings</dt>
-              <dd className="condensed text-[18px] font-bold text-zinc-50 tabular">{pulse.activeCount} / {companies.length}</dd>
-            </div>
-          </dl>
+          <div className="flex flex-col gap-3">
+            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-rule border border-rule rounded-[4px] overflow-hidden">
+              <div className="bg-floor px-4 py-3">
+                <dt className="text-[11px] text-ash">Total Market Cap</dt>
+                <dd className="condensed text-[18px] font-bold text-zinc-50 tabular">{fmtCompact(pulse.totalMcap)} gold</dd>
+              </div>
+              <div className="bg-floor px-4 py-3">
+                <dt className="text-[11px] text-ash">24h Floor Volume</dt>
+                <dd className="condensed text-[18px] font-bold text-bullion tabular">{fmtCompact(pulse.totalVol)} gold</dd>
+              </div>
+              <div className="bg-floor px-4 py-3">
+                <dt className="text-[11px] text-ash">Top 24h Mover</dt>
+                <dd className="condensed text-[18px] font-bold tabular">
+                  <Link href={`/trade/${pulse.topGainer.ticker}`} className="hover:underline text-zinc-50">
+                    ${pulse.topGainer.ticker}
+                  </Link>{" "}
+                  <span className={moveColor(pulse.topGainer.change24h)}>{fmtPct(pulse.topGainer.change24h)}</span>
+                </dd>
+              </div>
+              <div className="bg-floor px-4 py-3">
+                <dt className="text-[11px] text-ash">Active Listings</dt>
+                <dd className="condensed text-[18px] font-bold text-zinc-50 tabular">{pulse.activeCount} / {companies.length}</dd>
+              </div>
+            </dl>
+
+            {floorTrades.length > 0 && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 text-[12px] tabular">
+                <span className="shrink-0 text-[11px] font-semibold text-ash uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-bull animate-pulse" />
+                  Floor tape
+                </span>
+                {floorTrades.map((ft) => (
+                  <Link
+                    key={ft.id}
+                    href={`/trade/${ft.ticker}`}
+                    className="shrink-0 px-2.5 py-1 rounded-[4px] border border-rule bg-pane hover:border-zinc-500 text-paper flex items-center gap-1.5 transition"
+                  >
+                    <span className="font-bold text-zinc-50">${ft.ticker}</span>
+                    <span>{ft.quantity} sh @ {fmtPrice(ft.price)}g</span>
+                    <span className="text-ash text-[11px]">{timeAgoShort(ft.createdAt)}</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         <section aria-labelledby="listings" className="flex flex-col gap-3">
@@ -164,6 +196,11 @@ export default function HomePage() {
                       </button>
                     </th>
                     <th scope="col" className="text-right font-normal py-2.5 px-2 hidden md:table-cell">
+                      <button type="button" onClick={() => toggleSort("dividendYieldPct")} className="hover:text-paper cursor-pointer" title="Latest weekly dividend per share / current price">
+                        Div Yield{sortArrow("dividendYieldPct")}
+                      </button>
+                    </th>
+                    <th scope="col" className="text-right font-normal py-2.5 px-2 hidden md:table-cell">
                       <button type="button" onClick={() => toggleSort("volume24h")} className="hover:text-paper cursor-pointer">
                         {t("markets.thVolume")}{sortArrow("volume24h")}
                       </button>
@@ -185,7 +222,7 @@ export default function HomePage() {
                   {!loaded &&
                     [0, 1, 2].map((i) => (
                       <tr key={i} className="border-b border-rule last:border-0">
-                        <td colSpan={8} className="h-[57px]">
+                        <td colSpan={9} className="h-[57px]">
                           <div className="mx-4 h-3 w-40 rounded bg-pane" />
                         </td>
                       </tr>
@@ -228,6 +265,9 @@ export default function HomePage() {
                       </td>
                       <td className="py-2.5 px-2 text-right text-zinc-50 font-medium">{fmtPrice(c.currentPrice)}</td>
                       <td className={`py-2.5 pl-2 pr-3 sm:px-2 text-right ${moveColor(c.change24h)}`}>{fmtPct(c.change24h)}</td>
+                      <td className="py-2.5 px-2 text-right text-bullion hidden md:table-cell">
+                        {c.dividendYieldPct && c.dividendYieldPct > 0 ? `${c.dividendYieldPct.toFixed(2)}%` : "–"}
+                      </td>
                       <td className="py-2.5 px-2 text-right text-paper hidden md:table-cell">{fmtCompact(c.volume24h)}</td>
                       <td className="py-2.5 px-2 text-right text-paper hidden sm:table-cell">{fmtCompact(c.marketCap)}</td>
                       <td className="py-2.5 px-2 text-right text-paper hidden md:table-cell">{c.weeklyRevenue ? fmtCompact(c.weeklyRevenue) : "–"}</td>
@@ -240,7 +280,7 @@ export default function HomePage() {
                   ))}
                   {loaded && companies.length > 0 && rows.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="py-6 px-4 text-ash">No company matches “{query}”.</td>
+                      <td colSpan={9} className="py-6 px-4 text-ash">No company matches “{query}”.</td>
                     </tr>
                   )}
                 </tbody>

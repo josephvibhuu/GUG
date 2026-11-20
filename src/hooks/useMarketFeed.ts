@@ -1,7 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import type { Company } from "@/lib/market";
+import type { Company, FloorTrade } from "@/lib/market";
 import type { FloorSchedule } from "@/lib/session";
 import { stableBody } from "./usePoll";
 import { checkPriceAlerts } from "@/lib/priceAlerts";
@@ -29,6 +29,7 @@ export interface MarketFeed {
   user: FeedUser | null;
   schedule: FloorSchedule | null;
   sparklines: Record<string, number[]>;
+  floorTrades: FloorTrade[];
   clockOffset: number; // server time minus local time, ms
 }
 
@@ -37,7 +38,7 @@ export interface MarketFeed {
   Before, the header polled /api/market and /api/auth every 2.5 s and the market page polled
   /api/market again on its own. Unchanged responses don't re-render anything.
 */
-const EMPTY: MarketFeed = { loaded: false, companies: [], user: null, schedule: null, sparklines: {}, clockOffset: 0 };
+const EMPTY: MarketFeed = { loaded: false, companies: [], user: null, schedule: null, sparklines: {}, floorTrades: [], clockOffset: 0 };
 const VOLATILE = ["serverNow", "currentUTC", "timeRemainingSeconds", "timeRemainingFormatted"];
 
 let state: MarketFeed = EMPTY;
@@ -76,6 +77,7 @@ export async function refreshMarketFeed(): Promise<void> {
         user: data.user || null,
         schedule: data.marketSchedule || null,
         sparklines: data.sparklines || {},
+        floorTrades: data.floorTrades || [],
         clockOffset,
       };
       listeners.forEach((l) => l());
