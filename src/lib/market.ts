@@ -892,6 +892,8 @@ export interface IPOApplication {
   pressViewers?: string;
   pressFrequency?: string;
   specialNotes?: string;
+  listingTier?: "SELF_MANAGED" | "ASSISTED";
+  offeringRound?: number;
 }
 
 export async function submitIPOApplication(params: {
@@ -914,6 +916,8 @@ export async function submitIPOApplication(params: {
   pressViewers?: string;
   pressFrequency?: string;
   specialNotes?: string;
+  listingTier?: "SELF_MANAGED" | "ASSISTED";
+  offeringRound?: number;
 }): Promise<{ success: boolean; message: string; applicationId?: string }> {
   await initDb();
   const db = getDb();
@@ -943,6 +947,8 @@ export async function submitIPOApplication(params: {
 
   const appId = `ipo_app_${crypto.randomUUID().slice(0, 8)}`;
   const now = new Date().toISOString();
+  const listingTier = params.listingTier === "ASSISTED" ? "ASSISTED" : "SELF_MANAGED";
+  const offeringRound = Math.max(1, Math.floor(Number(params.offeringRound) || 1));
 
   await db.execute({
     sql: `INSERT INTO ipo_applications (
@@ -950,8 +956,9 @@ export async function submitIPOApplication(params: {
             proposed_total_shares, proposed_ipo_price, proposed_founder_retain_percent,
             logo_url, status, created_at,
             discord_id, business_type, weekly_revenue, factory_level, workers_count,
-            production_output, press_viewers, press_frequency, special_notes
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            production_output, press_viewers, press_frequency, special_notes,
+            listing_tier, offering_round
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       appId,
       params.userId,
@@ -974,6 +981,8 @@ export async function submitIPOApplication(params: {
       params.pressViewers ? params.pressViewers.trim() : null,
       params.pressFrequency ? params.pressFrequency.trim() : null,
       params.specialNotes ? params.specialNotes.trim() : null,
+      listingTier,
+      offeringRound,
     ],
   });
 
@@ -1031,6 +1040,8 @@ export async function getIPOApplications(status?: string): Promise<IPOApplicatio
     pressViewers: r.press_viewers ? String(r.press_viewers) : undefined,
     pressFrequency: r.press_frequency ? String(r.press_frequency) : undefined,
     specialNotes: r.special_notes ? String(r.special_notes) : undefined,
+    listingTier: r.listing_tier === "ASSISTED" ? "ASSISTED" : "SELF_MANAGED",
+    offeringRound: r.offering_round != null ? Number(r.offering_round) : 1,
   }));
 }
 
@@ -1068,6 +1079,8 @@ export async function getUserIPOApplications(userId: string): Promise<IPOApplica
     pressViewers: r.press_viewers ? String(r.press_viewers) : undefined,
     pressFrequency: r.press_frequency ? String(r.press_frequency) : undefined,
     specialNotes: r.special_notes ? String(r.special_notes) : undefined,
+    listingTier: r.listing_tier === "ASSISTED" ? "ASSISTED" : "SELF_MANAGED",
+    offeringRound: r.offering_round != null ? Number(r.offering_round) : 1,
   }));
 }
 
@@ -1114,11 +1127,22 @@ export async function approveAndListIPO(
     return { success: false, message: listRes.message || "Failed to list company" };
   }
 
-  // Carry the application's revenue estimate and Discord contact over to the listed company
+  // Carry the application's revenue estimate, Discord contact, and listing tier/fee % over to the listed company
+  const listingTier = String(app.listing_tier || "SELF_MANAGED") === "ASSISTED" ? "ASSISTED" : "SELF_MANAGED";
+  const offeringRound = Math.max(1, Number(app.offering_round || 1));
+  const ipoFeePct = listingTier === "ASSISTED" ? (offeringRound >= 2 ? 5.0 : 10.0) : 0.0;
+
   if (listRes.company) {
     await db.execute({
-      sql: "UPDATE companies SET weekly_revenue = ?, discord_handle = ? WHERE id = ?",
-      args: [Math.max(0, Number(app.weekly_revenue || 0)), app.discord_id ? String(app.discord_id) : null, listRes.company.id],
+      sql: "UPDATE companies SET weekly_revenue = ?, discord_handle = ?, listing_tier = ?, ipo_fee_pct = ?, offering_round = ? WHERE id = ?",
+      args: [
+        Math.max(0, Number(app.weekly_revenue || 0)),
+        app.discord_id ? String(app.discord_id) : null,
+        listingTier,
+        ipoFeePct,
+        offeringRound,
+        listRes.company.id,
+      ],
     });
   }
 

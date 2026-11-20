@@ -342,25 +342,42 @@ export async function placeOrder(params: PlaceOrderParams): Promise<OrderResult>
             sql: "SELECT value FROM settings WHERE key = 'ipo_listing_fee' LIMIT 1",
           });
           const targetListingFee = listingSetting.rows.length > 0 ? Number(listingSetting.rows[0].value) : 200;
-          // Compare-and-swap on the collected total, so two fills at once can't both take the full remaining fee
+          let baseFeeTaken = 0;
+          let pctFeeTaken = 0;
+          let ipoFeePct = 0;
+
+          // Compare-and-swap on the collected total, so two fills at once can't both take the full remaining base fee
           for (let attempt = 0; attempt < 5; attempt++) {
             const compRow = await db.execute({
-              sql: "SELECT ipo_fee_collected FROM companies WHERE id = ? LIMIT 1",
+              sql: "SELECT ipo_fee_collected, ipo_fee_pct FROM companies WHERE id = ? LIMIT 1",
               args: [actualCompanyId],
             });
             const collected = compRow.rows.length > 0 ? Number(compRow.rows[0].ipo_fee_collected || 0) : 0;
+            ipoFeePct = compRow.rows.length > 0 ? Number(compRow.rows[0].ipo_fee_pct || 0) : 0;
             const remainingListingFee = Math.max(0, Math.round((targetListingFee - collected) * 100) / 100);
-            const take = Math.min(sellerProceeds, remainingListingFee);
-            if (take <= 0) break;
+            const takeBase = Math.min(sellerProceeds, remainingListingFee);
+
+            // Assisted IPO Syndicate % fee (10% on Round 1, 5% on Round 2+) on remaining proceeds after base fee
+            const afterBase = Math.max(0, Math.round((sellerProceeds - takeBase) * 100) / 100);
+            const takePct = ipoFeePct > 0 && afterBase > 0
+              ? Math.round(afterBase * (ipoFeePct / 100) * 100) / 100
+              : 0;
+            const totalTake = Math.round((takeBase + takePct) * 100) / 100;
+            if (totalTake <= 0) break;
+
             const swap = await db.execute({
               sql: "UPDATE companies SET ipo_fee_collected = ipo_fee_collected + ? WHERE id = ? AND ipo_fee_collected = ?",
-              args: [take, actualCompanyId, collected],
+              args: [totalTake, actualCompanyId, collected],
             });
             if (swap.rowsAffected > 0) {
-              ipoFeeDeducted = take;
+              baseFeeTaken = takeBase;
+              pctFeeTaken = takePct;
+              ipoFeeDeducted = totalTake;
               break;
             }
           }
+          void baseFeeTaken;
+          void pctFeeTaken;
         } catch (e) {
           console.warn("Error calculating IPO fee deduction in engine:", e);
         }

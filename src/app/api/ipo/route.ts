@@ -48,6 +48,8 @@ export async function POST(request: Request) {
       pressViewers,
       pressFrequency,
       specialNotes,
+      listingTier,
+      offeringRound,
     } = body;
 
     if (!ticker || !name || !description || !sector || !proposedTotalShares || !proposedIpoPrice) {
@@ -85,6 +87,8 @@ export async function POST(request: Request) {
       pressViewers: pressViewers ? String(pressViewers).trim() : undefined,
       pressFrequency: pressFrequency ? String(pressFrequency).trim() : undefined,
       specialNotes: specialNotes ? String(specialNotes).trim() : undefined,
+      listingTier: listingTier === "ASSISTED" ? "ASSISTED" : "SELF_MANAGED",
+      offeringRound: offeringRound !== undefined && !isNaN(Number(offeringRound)) ? Math.max(1, Number(offeringRound)) : 1,
     });
 
     return NextResponse.json(res);

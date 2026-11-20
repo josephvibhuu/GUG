@@ -69,6 +69,8 @@ export default function IpoPage() {
   const [ipoPrice, setIpoPrice] = useState("10.00");
   const [floatPercent, setFloatPercent] = useState<number>(20);
   const [logoEmoji, setLogoEmoji] = useState("🏛️");
+  const [listingTier, setListingTier] = useState<"SELF_MANAGED" | "ASSISTED">("SELF_MANAGED");
+  const [offeringRound, setOfferingRound] = useState<number>(1);
 
   const [applications, setApplications] = useState<UserApplication[]>([]);
   const [loading, setLoading] = useState(false);
@@ -84,6 +86,9 @@ export default function IpoPage() {
   const publicFloat = Math.max(1, numTotalShares - rawFounderShares);
   const founderShares = numTotalShares - publicFloat;
   const publicFloatVal = publicFloat * numIpoPrice;
+  const feeRatePct = listingTier === "ASSISTED" ? (offeringRound >= 2 ? 5 : 10) : 0;
+  const percentFeeGold = Math.round(publicFloatVal * (feeRatePct / 100) * 100) / 100;
+  const totalEstimatedFee = 200 + percentFeeGold;
 
   const emojiList = ["🏛️", "⚙️", "⚒️", "🗡️", "💎", "🌾", "🚢", "🚂", "🛡️", "⚗️", "👑", "📜", "📰"];
 
@@ -181,6 +186,8 @@ export default function IpoPage() {
           proposedFounderRetainPercent: founderPercent,
           proposedFloatPercent: floatPercent,
           logoUrl: logoEmoji,
+          listingTier,
+          offeringRound: listingTier === "ASSISTED" ? offeringRound : 1,
         }),
       });
 
@@ -222,8 +229,8 @@ export default function IpoPage() {
         </div>
 
         <p className="text-[13px] text-paper border-l-2 border-bullion pl-3 max-w-2xl leading-relaxed">
-          No fee up front. The exchange&apos;s 200-gold listing fee comes out of the first IPO share sales; the rest goes into your company&apos;s
-          treasury, and you can move it to your purse from the Founder tab.
+          No fee up front. Choose <strong className="text-zinc-100">Full Manual Control</strong> (200 gold base fee) or{" "}
+          <strong className="text-amber-300">Assisted &amp; Supported IPO</strong> (200 gold + 10% on Round 1, 5% on Round 2+ for full valuation, dividend processing &amp; advisory). Fees come out of first IPO share sales.
         </p>
 
         {/* Existing Applications Section */}
@@ -813,6 +820,86 @@ export default function IpoPage() {
               </div>
             </div>
 
+            {/* Listing Tier Selection */}
+            <div className="pt-2 border-t border-rule/80 space-y-2.5">
+              <label className="text-[12px] font-sans text-zinc-200 font-semibold block">
+                Listing Support &amp; Fee Structure
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setListingTier("SELF_MANAGED")}
+                  className={`text-left p-3 rounded-[4px] border transition cursor-pointer ${
+                    listingTier === "SELF_MANAGED"
+                      ? "bg-amber-500/15 border-amber-400 text-white"
+                      : "bg-floor border-rule text-zinc-300 hover:border-zinc-500"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="font-bold text-xs text-zinc-100">Full Manual Control</span>
+                    <span className="tabular text-[11px] font-bold px-1.5 py-0.5 rounded bg-zinc-800 text-amber-300">
+                      200g Flat
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-snug">
+                    Self-managed listing. You handle your own valuation, pricing, and dividend filings. Only the 200 gold base processing fee applies.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setListingTier("ASSISTED")}
+                  className={`text-left p-3 rounded-[4px] border transition cursor-pointer ${
+                    listingTier === "ASSISTED"
+                      ? "bg-amber-500/15 border-amber-400 text-white"
+                      : "bg-floor border-rule text-zinc-300 hover:border-zinc-500"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="font-bold text-xs text-amber-300">Assisted &amp; Supported IPO</span>
+                    <span className="tabular text-[11px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                      200g + {offeringRound >= 2 ? "5%" : "10%"}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-snug">
+                    We assist with company valuation, pricing, dividend processing &amp; ongoing advisory. 200g + 10% on Round 1, and just 5% on Round 2+ follow-on rounds.
+                  </p>
+                </button>
+              </div>
+
+              {listingTier === "ASSISTED" && (
+                <div className="flex items-center justify-between gap-3 p-2.5 rounded-[4px] bg-floor border border-amber-500/30">
+                  <span className="text-[11px] text-zinc-300 font-medium">
+                    Assisted Listing Round:
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setOfferingRound(1)}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition cursor-pointer ${
+                        offeringRound === 1
+                          ? "bg-amber-500 text-black border-amber-400"
+                          : "bg-zinc-800 text-zinc-300 border-rule hover:text-white"
+                      }`}
+                    >
+                      Round 1 (10% fee)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOfferingRound(2)}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition cursor-pointer ${
+                        offeringRound >= 2
+                          ? "bg-amber-500 text-black border-amber-400"
+                          : "bg-zinc-800 text-zinc-300 border-rule hover:text-white"
+                      }`}
+                    >
+                      Round 2+ Follow-on (5% fee)
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button
               type="submit"
               disabled={loading}
@@ -888,10 +975,18 @@ export default function IpoPage() {
 
               <div className="flex justify-between p-2 rounded bg-floor border border-rule">
                 <div className="flex flex-col">
-                  <span className="text-paper font-sans font-semibold">Listing fee:</span>
-                  <span className="text-[12px] text-ash">Taken from the first sales, nothing up front</span>
+                  <span className="text-paper font-sans font-semibold">
+                    Listing fee ({listingTier === "ASSISTED" ? `Assisted R${offeringRound >= 2 ? "2+" : "1"}` : "Manual"}):
+                  </span>
+                  <span className="text-[12px] text-ash">
+                    {listingTier === "ASSISTED"
+                      ? `200.00g base + ${feeRatePct}% (${percentFeeGold.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}g) from first sales`
+                      : "200.00g base taken from the first sales, nothing up front"}
+                  </span>
                 </div>
-                <span className="tabular font-bold text-bear">-200.00 gold</span>
+                <span className="tabular font-bold text-bear">
+                  -{totalEstimatedFee.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} gold
+                </span>
               </div>
 
               <div className="flex justify-between p-2.5 rounded bg-floor border border-rule">
@@ -900,7 +995,7 @@ export default function IpoPage() {
                   <span className="text-[12px] text-paper">Goes into the company treasury as shares sell. Move it to your purse from the Founder tab.</span>
                 </div>
                 <span className="tabular font-black text-paper text-sm">
-                  {Math.max(0, publicFloatVal - 200).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} gold
+                  {Math.max(0, publicFloatVal - totalEstimatedFee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} gold
                 </span>
               </div>
 

@@ -253,6 +253,9 @@ export async function initDb(): Promise<void> {
   try {
     await db.execute(`ALTER TABLE companies ADD COLUMN co_founder_id TEXT;`);
   } catch {}
+  try { await db.execute(`ALTER TABLE companies ADD COLUMN listing_tier TEXT NOT NULL DEFAULT 'SELF_MANAGED';`); } catch {}
+  try { await db.execute(`ALTER TABLE companies ADD COLUMN ipo_fee_pct REAL NOT NULL DEFAULT 0.0;`); } catch {}
+  try { await db.execute(`ALTER TABLE companies ADD COLUMN offering_round INTEGER NOT NULL DEFAULT 1;`); } catch {}
 
   // Migrations for enhanced IPO applications
   try { await db.execute(`ALTER TABLE ipo_applications ADD COLUMN discord_id TEXT;`); } catch {}
@@ -264,6 +267,8 @@ export async function initDb(): Promise<void> {
   try { await db.execute(`ALTER TABLE ipo_applications ADD COLUMN press_viewers TEXT;`); } catch {}
   try { await db.execute(`ALTER TABLE ipo_applications ADD COLUMN press_frequency TEXT;`); } catch {}
   try { await db.execute(`ALTER TABLE ipo_applications ADD COLUMN special_notes TEXT;`); } catch {}
+  try { await db.execute(`ALTER TABLE ipo_applications ADD COLUMN listing_tier TEXT NOT NULL DEFAULT 'SELF_MANAGED';`); } catch {}
+  try { await db.execute(`ALTER TABLE ipo_applications ADD COLUMN offering_round INTEGER NOT NULL DEFAULT 1;`); } catch {}
 
 
   await db.execute(`

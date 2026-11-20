@@ -179,7 +179,7 @@ ${recent || "• No entries yet."}
           {copied ? <Check className="h-3.5 w-3.5 text-bull" /> : <Copy className="h-3.5 w-3.5 text-ash" />}
           {copied ? "Copied" : "Copy for Discord"}
         </button>
-        {ticker === "GUG" && (
+        {ticker === "GUG" && isFounderOrAdmin && (
           <button
             type="button"
             onClick={async () => {
@@ -197,7 +197,7 @@ ${recent || "• No entries yet."}
             className="h-8 px-3 rounded-[4px] bg-zinc-900 border border-amber-500/50 hover:border-amber-400 text-amber-300 text-[12px] font-semibold transition cursor-pointer"
             title="Download the official single-page visual Shareholder Report Card for $GUG"
           >
-            Shareholder Report (Week 2)
+            Shareholder Report Card
           </button>
         )}
         {isFounderOrAdmin && (
