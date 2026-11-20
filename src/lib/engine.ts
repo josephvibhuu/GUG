@@ -643,6 +643,102 @@ export async function cancelOrder(userId: string, orderId: string): Promise<{ su
   return { success: true, message: "Order cancelled and escrow returned to your balance." };
 }
 
+// Modify an open limit order's price and/or remaining quantity atomically
+export async function modifyOrder(
+  userId: string,
+  orderId: string,
+  newPriceRaw: number,
+  newQuantityRaw: number
+): Promise<OrderResult> {
+  await initDb();
+  const db = getDb();
+
+  const newPrice = Math.round(Number(newPriceRaw) * 100) / 100;
+  const newQuantity = Math.floor(Number(newQuantityRaw));
+
+  if (!Number.isFinite(newPrice) || newPrice <= 0) {
+    return { success: false, message: "Price must be greater than 0.", filledQuantity: 0, remainingQuantity: 0, averageFillPrice: 0, tradesExecuted: [] };
+  }
+  if (!Number.isFinite(newQuantity) || newQuantity <= 0) {
+    return { success: false, message: "Quantity must be at least 1 share.", filledQuantity: 0, remainingQuantity: 0, averageFillPrice: 0, tradesExecuted: [] };
+  }
+  if (String(orderId).startsWith("ord_ipo_")) {
+    return { success: false, message: "The IPO share sale can't be edited.", filledQuantity: 0, remainingQuantity: 0, averageFillPrice: 0, tradesExecuted: [] };
+  }
+
+  const orderRes = await db.execute({
+    sql: "SELECT * FROM orders WHERE id = ? AND user_id = ? AND status IN ('OPEN', 'PARTIAL')",
+    args: [orderId, userId],
+  });
+  if (orderRes.rows.length === 0) {
+    return { success: false, message: "Active order not found or already filled/cancelled.", filledQuantity: 0, remainingQuantity: 0, averageFillPrice: 0, tradesExecuted: [] };
+  }
+
+  const order = orderRes.rows[0];
+  if (String(order.order_type) !== "LIMIT") {
+    return { success: false, message: "Only limit orders can be edited.", filledQuantity: 0, remainingQuantity: 0, averageFillPrice: 0, tradesExecuted: [] };
+  }
+
+  const oldRemaining = Number(order.remaining_quantity);
+  const oldPrice = Number(order.price);
+  const side = String(order.type) as "BUY" | "SELL";
+  const companyId = String(order.company_id);
+
+  // Pre-check that the user can cover any increase before cancelling the resting order
+  if (side === "BUY") {
+    const oldEscrow = Math.round(oldRemaining * oldPrice * 100) / 100;
+    const newEscrow = Math.round(newQuantity * newPrice * 100) / 100;
+    const delta = newEscrow - oldEscrow;
+    if (delta > 0) {
+      const uRes = await db.execute({ sql: "SELECT cash_balance FROM users WHERE id = ?", args: [userId] });
+      const avail = uRes.rows.length > 0 ? Number(uRes.rows[0].cash_balance) : 0;
+      if (avail < delta) {
+        return {
+          success: false,
+          message: `Insufficient funds for this edit (needs ${delta.toFixed(2)} more gold, available: ${avail.toFixed(2)}).`,
+          filledQuantity: 0,
+          remainingQuantity: 0,
+          averageFillPrice: 0,
+          tradesExecuted: [],
+        };
+      }
+    }
+  } else {
+    const deltaQty = newQuantity - oldRemaining;
+    if (deltaQty > 0) {
+      const pRes = await db.execute({
+        sql: "SELECT shares, locked_shares FROM portfolios WHERE user_id = ? AND company_id = ?",
+        args: [userId, companyId],
+      });
+      const free = pRes.rows.length > 0 ? Number(pRes.rows[0].shares) - Number(pRes.rows[0].locked_shares) : 0;
+      if (free < deltaQty) {
+        return {
+          success: false,
+          message: `Insufficient free shares for this edit (needs ${deltaQty} more, available: ${free}).`,
+          filledQuantity: 0,
+          remainingQuantity: 0,
+          averageFillPrice: 0,
+          tradesExecuted: [],
+        };
+      }
+    }
+  }
+
+  const cancelRes = await cancelOrder(userId, orderId);
+  if (!cancelRes.success) {
+    return { success: false, message: cancelRes.message, filledQuantity: 0, remainingQuantity: 0, averageFillPrice: 0, tradesExecuted: [] };
+  }
+
+  return placeOrder({
+    userId,
+    companyId,
+    type: side,
+    orderType: "LIMIT",
+    price: newPrice,
+    quantity: newQuantity,
+  });
+}
+
 // Helper: add shares to a holding (one statement, so parallel fills for a new holder can't collide)
 async function addSharesToPortfolio(db: any, userId: string, companyId: string, addedShares: number, buyPrice: number) {
   await db.execute({

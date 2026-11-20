@@ -35,25 +35,53 @@ function useWatchlist() {
   return { starred, toggle };
 }
 
+type SortField = "marketCap" | "currentPrice" | "change24h" | "volume24h" | "weeklyRevenue";
+
 export default function HomePage() {
   const router = useRouter();
   const { t } = useI18n();
   const { loaded, companies, schedule, clockOffset, sparklines } = useMarketFeed();
   const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState<SortField>("marketCap");
+  const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
   const { starred, toggle } = useWatchlist();
+
+  const toggleSort = (field: SortField) => {
+    if (sortBy === field) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortBy(field);
+      setSortDir("desc");
+    }
+  };
+
+  const pulse = useMemo(() => {
+    if (!companies.length) return null;
+    const totalVol = companies.reduce((s, c) => s + (c.volume24h || 0), 0);
+    const totalMcap = companies.reduce((s, c) => s + (c.marketCap || 0), 0);
+    const topGainer = [...companies].sort((a, b) => (b.change24h || 0) - (a.change24h || 0))[0];
+    const activeCount = companies.filter((c) => c.status === "ACTIVE").length;
+    return { totalVol, totalMcap, topGainer, activeCount };
+  }, [companies]);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = !q
       ? companies
       : companies.filter((c) => [c.ticker, c.name, c.sector].some((v) => v.toLowerCase().includes(q)));
-    // Starred companies float to the top
+    const mult = sortDir === "desc" ? -1 : 1;
+    // Starred companies float to the top, then sort by selected column
     return [...filtered].sort((a, b) => {
       const aS = starred.has(a.ticker) ? 0 : 1;
       const bS = starred.has(b.ticker) ? 0 : 1;
-      return aS - bS;
+      if (aS !== bS) return aS - bS;
+      const av = Number(a[sortBy] || 0);
+      const bv = Number(b[sortBy] || 0);
+      return (av - bv) * mult;
     });
-  }, [companies, query, starred]);
+  }, [companies, query, starred, sortBy, sortDir]);
+
+  const sortArrow = (field: SortField) => (sortBy === field ? (sortDir === "desc" ? " ↓" : " ↑") : "");
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -61,6 +89,32 @@ export default function HomePage() {
 
       <main className="w-full max-w-[1200px] mx-auto px-4 sm:px-6 py-6 sm:py-10 flex flex-col gap-8 sm:gap-10">
         <FloorStrip schedule={schedule} clockOffset={clockOffset} />
+
+        {pulse && (
+          <dl className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-rule border border-rule rounded-[4px] overflow-hidden">
+            <div className="bg-floor px-4 py-3">
+              <dt className="text-[11px] text-ash">Total Market Cap</dt>
+              <dd className="condensed text-[18px] font-bold text-zinc-50 tabular">{fmtCompact(pulse.totalMcap)} gold</dd>
+            </div>
+            <div className="bg-floor px-4 py-3">
+              <dt className="text-[11px] text-ash">24h Floor Volume</dt>
+              <dd className="condensed text-[18px] font-bold text-bullion tabular">{fmtCompact(pulse.totalVol)} gold</dd>
+            </div>
+            <div className="bg-floor px-4 py-3">
+              <dt className="text-[11px] text-ash">Top 24h Mover</dt>
+              <dd className="condensed text-[18px] font-bold tabular">
+                <Link href={`/trade/${pulse.topGainer.ticker}`} className="hover:underline text-zinc-50">
+                  ${pulse.topGainer.ticker}
+                </Link>{" "}
+                <span className={moveColor(pulse.topGainer.change24h)}>{fmtPct(pulse.topGainer.change24h)}</span>
+              </dd>
+            </div>
+            <div className="bg-floor px-4 py-3">
+              <dt className="text-[11px] text-ash">Active Listings</dt>
+              <dd className="condensed text-[18px] font-bold text-zinc-50 tabular">{pulse.activeCount} / {companies.length}</dd>
+            </div>
+          </dl>
+        )}
 
         <section aria-labelledby="listings" className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -99,11 +153,31 @@ export default function HomePage() {
                   <tr className="text-[12px] text-ash border-b border-rule">
                     <th scope="col" className="w-7 py-2.5 pl-3 sm:pl-4 pr-0 hidden sm:table-cell" aria-label="Watchlist" />
                     <th scope="col" className="text-left font-normal py-2.5 pl-3 sm:pl-2 pr-2">{t("markets.thCompany")}</th>
-                    <th scope="col" className="text-right font-normal py-2.5 px-2">{t("markets.thPrice")}</th>
-                    <th scope="col" className="text-right font-normal py-2.5 pl-2 pr-3 sm:px-2">{t("markets.th24h")}</th>
-                    <th scope="col" className="text-right font-normal py-2.5 px-2 hidden md:table-cell">{t("markets.thVolume")}</th>
-                    <th scope="col" className="text-right font-normal py-2.5 px-2 hidden sm:table-cell">{t("markets.thMarketCap")}</th>
-                    <th scope="col" className="text-right font-normal py-2.5 px-2 hidden md:table-cell">{t("trade.weeklyRevenue")}</th>
+                    <th scope="col" className="text-right font-normal py-2.5 px-2">
+                      <button type="button" onClick={() => toggleSort("currentPrice")} className="hover:text-paper cursor-pointer">
+                        {t("markets.thPrice")}{sortArrow("currentPrice")}
+                      </button>
+                    </th>
+                    <th scope="col" className="text-right font-normal py-2.5 pl-2 pr-3 sm:px-2">
+                      <button type="button" onClick={() => toggleSort("change24h")} className="hover:text-paper cursor-pointer">
+                        {t("markets.th24h")}{sortArrow("change24h")}
+                      </button>
+                    </th>
+                    <th scope="col" className="text-right font-normal py-2.5 px-2 hidden md:table-cell">
+                      <button type="button" onClick={() => toggleSort("volume24h")} className="hover:text-paper cursor-pointer">
+                        {t("markets.thVolume")}{sortArrow("volume24h")}
+                      </button>
+                    </th>
+                    <th scope="col" className="text-right font-normal py-2.5 px-2 hidden sm:table-cell">
+                      <button type="button" onClick={() => toggleSort("marketCap")} className="hover:text-paper cursor-pointer">
+                        {t("markets.thMarketCap")}{sortArrow("marketCap")}
+                      </button>
+                    </th>
+                    <th scope="col" className="text-right font-normal py-2.5 px-2 hidden md:table-cell">
+                      <button type="button" onClick={() => toggleSort("weeklyRevenue")} className="hover:text-paper cursor-pointer">
+                        {t("trade.weeklyRevenue")}{sortArrow("weeklyRevenue")}
+                      </button>
+                    </th>
                     <th scope="col" className="text-right font-normal py-2.5 pl-2 pr-4 hidden lg:table-cell">14 days</th>
                   </tr>
                 </thead>

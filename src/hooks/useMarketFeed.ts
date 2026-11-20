@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import type { Company } from "@/lib/market";
 import type { FloorSchedule } from "@/lib/session";
 import { stableBody } from "./usePoll";
+import { checkPriceAlerts } from "@/lib/priceAlerts";
 
 export interface FeedUser {
   id: string;
@@ -78,6 +79,7 @@ export async function refreshMarketFeed(): Promise<void> {
         clockOffset,
       };
       listeners.forEach((l) => l());
+      checkPriceAlerts(state.companies);
     }
     failures = 0;
   } catch {

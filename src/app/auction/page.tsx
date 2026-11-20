@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import { usePoll, stableBody } from "@/hooks/usePoll";
 import Navbar from "@/components/Navbar";
 import AuctionCard from "@/components/AuctionCard";
-import { Gavel, Clock, Tag, ShoppingCart, Check, AlertCircle, X } from "lucide-react";
+import { Gavel, Clock, Tag, ShoppingCart, Check, AlertCircle, X, Search } from "lucide-react";
 import type { NftAuction, Nft, NftListing } from "@/lib/nft";
 import { fmtPrice } from "@/lib/format";
 import Link from "next/link";
@@ -38,6 +38,8 @@ export default function AuctionFloor() {
   const [loaded, setLoaded] = useState(false);
   const [buyingId, setBuyingId] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [query, setQuery] = useState("");
+  const [viewFilter, setViewFilter] = useState<"ALL" | "LIVE" | "P2P" | "SCHEDULED" | "PAST">("ALL");
   const lastBody = useRef("");
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -88,8 +90,35 @@ export default function AuctionFloor() {
     }
   }
 
-  const live = (data?.auctions ?? []).filter((a) => a.status === "LIVE");
-  const scheduled = (data?.auctions ?? []).filter((a) => a.status === "SCHEDULED");
+  const q = query.trim().toLowerCase();
+  const live = useMemo(
+    () =>
+      (data?.auctions ?? []).filter(
+        (a) =>
+          a.status === "LIVE" &&
+          (!q ||
+            a.nft.title.toLowerCase().includes(q) ||
+            a.nft.creatorName.toLowerCase().includes(q) ||
+            (a.sellerName || "").toLowerCase().includes(q))
+      ),
+    [data?.auctions, q]
+  );
+  const scheduled = useMemo(
+    () =>
+      (data?.auctions ?? []).filter(
+        (a) =>
+          a.status === "SCHEDULED" &&
+          (!q || a.nft.title.toLowerCase().includes(q) || a.nft.creatorName.toLowerCase().includes(q))
+      ),
+    [data?.auctions, q]
+  );
+  const filteredP2p = useMemo(
+    () =>
+      p2pListings.filter(
+        (l) => !q || (l.nftTitle || "").toLowerCase().includes(q) || (l.sellerName || "").toLowerCase().includes(q)
+      ),
+    [p2pListings, q]
+  );
   const past = data?.past ?? [];
 
   return (
@@ -97,27 +126,67 @@ export default function AuctionFloor() {
       <Navbar />
       <main className="w-full max-w-[1200px] mx-auto px-4 sm:px-6 py-6 sm:py-10 flex flex-col gap-10">
         {/* Header */}
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h1 className="text-[22px] font-bold text-zinc-50 flex items-center gap-2">
-              <Gavel className="h-5 w-5 text-bullion" />
-              Auction House &amp; P2P Trade Floor
-            </h1>
-            <Link
-              href="/portfolio"
-              className="text-[12px] text-bullion hover:underline font-semibold"
-            >
-              My Trophy Vault →
-            </Link>
-          </div>
-          <p className="text-sm text-ash">
-            Unique digital collectibles and sovereign artifacts. Support automatic proxy bidding, instant P2P trades, and verified provenance.
-          </p>
-          {data?.settings && (
-            <p className="text-[11px] text-zinc-600 mt-0.5">
-              House fee {data.settings.houseCutBps / 100}% · Artist resale royalty {data.settings.creatorRoyaltyBps / 100}% · Min raise {data.settings.minBidIncrementPct}%
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h1 className="text-[22px] font-bold text-zinc-50 flex items-center gap-2">
+                <Gavel className="h-5 w-5 text-bullion" />
+                Auction House &amp; P2P Trade Floor
+              </h1>
+              <Link
+                href="/portfolio"
+                className="text-[12px] text-bullion hover:underline font-semibold"
+              >
+                My Trophy Vault →
+              </Link>
+            </div>
+            <p className="text-sm text-ash">
+              Unique digital collectibles and sovereign artifacts. Support automatic proxy bidding, instant P2P trades, and verified provenance.
             </p>
-          )}
+            {data?.settings && (
+              <p className="text-[11px] text-zinc-600 mt-0.5">
+                House fee {data.settings.houseCutBps / 100}% · Artist resale royalty {data.settings.creatorRoyaltyBps / 100}% · Min raise {data.settings.minBidIncrementPct}%
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <div className="flex flex-wrap gap-1.5">
+              {(
+                [
+                  { id: "ALL", label: "All" },
+                  { id: "LIVE", label: `Live (${live.length})` },
+                  { id: "P2P", label: `Buy Now (${filteredP2p.length})` },
+                  { id: "SCHEDULED", label: `Upcoming (${scheduled.length})` },
+                  { id: "PAST", label: `Past Sales (${past.length})` },
+                ] as const
+              ).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setViewFilter(f.id)}
+                  className={`h-8 px-3 rounded-[4px] border text-[12px] cursor-pointer transition ${
+                    viewFilter === f.id
+                      ? "bg-rule border-zinc-500 text-zinc-50 font-semibold"
+                      : "bg-floor border-rule text-ash hover:text-paper"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <label className="relative w-full sm:w-64">
+              <span className="sr-only">Search NFTs</span>
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-ash" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search title, creator, seller…"
+                className="h-8 w-full rounded-[4px] border border-rule bg-floor pl-8 pr-2 text-[12px] text-paper placeholder:text-ash focus:outline-none focus:border-zinc-500"
+              />
+            </label>
+          </div>
         </div>
 
         {/* Global alert banner */}
@@ -138,6 +207,7 @@ export default function AuctionFloor() {
         )}
 
         {/* ── Live auctions ──────────────────────────────────────────────── */}
+        {(viewFilter === "ALL" || viewFilter === "LIVE") && (
         <section aria-labelledby="live-heading">
           <h2 id="live-heading" className="text-[14px] font-semibold text-zinc-50 mb-4 flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-bull animate-pulse" />
@@ -159,17 +229,18 @@ export default function AuctionFloor() {
             </div>
           )}
         </section>
+        )}
 
         {/* ── P2P Marketplace: Fixed Price Direct Listings ─────────────────── */}
-        {p2pListings.length > 0 && (
+        {(viewFilter === "ALL" || viewFilter === "P2P") && filteredP2p.length > 0 && (
           <section aria-labelledby="p2p-heading">
             <h2 id="p2p-heading" className="text-[14px] font-semibold text-zinc-50 mb-4 flex items-center gap-2">
               <Tag className="h-4 w-4 text-bullion" />
               Citizen P2P Marketplace (Instant Buy)
-              <span className="text-ash font-normal">({p2pListings.length})</span>
+              <span className="text-ash font-normal">({filteredP2p.length})</span>
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {p2pListings.map((listing) => (
+              {filteredP2p.map((listing) => (
                 <div
                   key={listing.id}
                   className="border border-rule rounded-[6px] overflow-hidden bg-pane flex flex-col hover:border-zinc-500 transition"
@@ -222,7 +293,7 @@ export default function AuctionFloor() {
         )}
 
         {/* ── Scheduled / upcoming ─────────────────────────────────────────── */}
-        {scheduled.length > 0 && (
+        {(viewFilter === "ALL" || viewFilter === "SCHEDULED") && scheduled.length > 0 && (
           <section aria-labelledby="upcoming-heading">
             <h2 id="upcoming-heading" className="text-[14px] font-semibold text-zinc-50 mb-4 flex items-center gap-2">
               <Clock className="h-3.5 w-3.5 text-ash" />
@@ -237,7 +308,7 @@ export default function AuctionFloor() {
         )}
 
         {/* ── Past auctions ────────────────────────────────────────────────── */}
-        {past.length > 0 && (
+        {(viewFilter === "ALL" || viewFilter === "PAST") && past.length > 0 && (
           <section aria-labelledby="past-heading">
             <h2 id="past-heading" className="text-[14px] font-semibold text-zinc-50 mb-3">Past Sales</h2>
             <div className="border border-rule rounded-[6px] overflow-hidden">

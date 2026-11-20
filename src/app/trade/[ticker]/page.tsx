@@ -1,11 +1,12 @@
 "use client";
 
-import { use, useCallback, useRef, useState, useSyncExternalStore, Suspense } from "react";
+import { use, useCallback, useEffect, useRef, useState, useSyncExternalStore, Suspense } from "react";
 import { emitToast } from "@/components/Toast";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { ChevronDown } from "lucide-react";
+import { Bell, ChevronDown, X } from "lucide-react";
+import { getPriceAlerts, addPriceAlert, removePriceAlert, type PriceAlert } from "@/lib/priceAlerts";
 import Navbar from "@/components/Navbar";
 import OrderBook from "@/components/OrderBook";
 import TradeForm from "@/components/TradeForm";
@@ -97,9 +98,19 @@ function Terminal({ ticker }: { ticker: string }) {
     return requested && VALID_TABS.includes(requested) ? requested : null;
   });
   const [dialog, setDialog] = useState<"buyback" | "earnings" | null>(null);
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [alertPrice, setAlertPrice] = useState("");
+  const [alerts, setAlerts] = useState<PriceAlert[]>([]);
   const lastBody = useRef("");
   // Track open order IDs to detect fills between polls
   const prevOrderIds = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const sync = () => setAlerts(getPriceAlerts(ticker));
+    sync();
+    window.addEventListener("price_alerts_updated", sync);
+    return () => window.removeEventListener("price_alerts_updated", sync);
+  }, [ticker]);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -255,6 +266,67 @@ function Terminal({ ticker }: { ticker: string }) {
           <Stat label="Market cap" value={`${fmtCompact(c.marketCap)} gold`} />
           {c.weeklyRevenue ? <Stat label="Revenue / week" value={`${fmtCompact(c.weeklyRevenue)} gold`} /> : null}
         </dl>
+
+        <div className="relative ml-auto">
+          <button
+            type="button"
+            onClick={() => {
+              setAlertPrice(c.currentPrice.toFixed(2));
+              setAlertOpen((o) => !o);
+            }}
+            className="h-8 px-2.5 rounded-[4px] border border-rule hover:border-zinc-500 text-[12px] text-paper flex items-center gap-1.5 cursor-pointer"
+            title="Set target price alert"
+          >
+            <Bell className={`h-3.5 w-3.5 ${alerts.length > 0 ? "text-bullion" : "text-ash"}`} />
+            <span className="hidden sm:inline">Alert{alerts.length > 0 ? ` (${alerts.length})` : ""}</span>
+          </button>
+
+          {alertOpen && (
+            <div className="absolute right-0 mt-1.5 w-64 rounded-[4px] border border-rule bg-pane p-3 shadow-xl z-30 text-[12px] flex flex-col gap-2.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-zinc-50">Price Alert · ${c.ticker}</span>
+                <button type="button" onClick={() => setAlertOpen(false)} className="text-ash hover:text-paper">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="flex gap-1.5">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={alertPrice}
+                  onChange={(e) => setAlertPrice(e.target.value)}
+                  className="flex-1 min-w-0 h-8 rounded-[3px] border border-rule bg-floor px-2 text-right text-zinc-50 tabular focus:outline-none focus:border-zinc-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const p = parseFloat(alertPrice);
+                    if (!Number.isFinite(p) || p <= 0) return;
+                    const dir = p >= c.currentPrice ? "ABOVE" : "BELOW";
+                    addPriceAlert(c.ticker, dir, p);
+                    emitToast({ type: "fill", title: "Alert set", body: `Will alert when $${c.ticker} is ${dir === "ABOVE" ? "≥" : "≤"} ${p.toFixed(2)}g` });
+                  }}
+                  className="h-8 px-2.5 rounded-[3px] bg-bullion hover:bg-amber-300 text-floor font-semibold cursor-pointer"
+                >
+                  Set
+                </button>
+              </div>
+              {alerts.length > 0 && (
+                <ul className="flex flex-col gap-1 border-t border-rule pt-2">
+                  {alerts.map((a) => (
+                    <li key={a.id} className="flex items-center justify-between text-ash">
+                      <span>{a.direction === "ABOVE" ? "≥" : "≤"} {a.targetPrice.toFixed(2)}g</span>
+                      <button type="button" onClick={() => removePriceAlert(a.id)} className="text-bear hover:underline">
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Terminal grid: chart | book | ticket, then tabs | trades */}

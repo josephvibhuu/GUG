@@ -304,6 +304,19 @@ export async function tickAuctions(): Promise<void> {
     sql: "UPDATE nft_auctions SET status = 'ENDED' WHERE status = 'LIVE' AND ends_at <= ?",
     args: [now],
   });
+
+  // Automatically settle any ended auctions so winners receive NFTs and sellers receive gold immediately
+  const endedRes = await db.execute({
+    sql: "SELECT id FROM nft_auctions WHERE status = 'ENDED'",
+  });
+  for (const row of endedRes.rows) {
+    try {
+      await settleAuctionCore(String(row.id));
+    } catch (err) {
+      console.error(`Auto-settle failed for auction ${row.id}:`, err);
+    }
+  }
+
   scheduleBlobPersist();
 }
 
@@ -566,6 +579,13 @@ export async function settleAuction(auctionId: string, byAdminId: string): Promi
   if (adminRes.rows.length === 0 || Number(adminRes.rows[0].is_admin) !== 1) {
     return { success: false, message: "Only admins can manually settle auctions." };
   }
+
+  return settleAuctionCore(auctionId);
+}
+
+async function settleAuctionCore(auctionId: string): Promise<{ success: boolean; message: string; sold?: boolean }> {
+  await initDb();
+  const db = getDb();
 
   const aucRes = await db.execute({ sql: "SELECT * FROM nft_auctions WHERE id = ?", args: [auctionId] });
   if (aucRes.rows.length === 0) return { success: false, message: "Auction not found." };
