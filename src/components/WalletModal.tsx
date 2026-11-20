@@ -126,7 +126,7 @@ export default function WalletModal({
   const withdrawGross = numWithdraw;
   const withdrawTax = Math.round(withdrawGross * tDecimal * 100) / 100;
   const withdrawNet = Math.max(0, Math.round((withdrawGross - withdrawTax) * 100) / 100);
-  const withdrawIronUnits = numWithdraw >= 100 ? 100 : Math.max(1, Math.ceil(numWithdraw / ironPrice));
+  const withdrawIronUnits = Math.max(1, Math.ceil(numWithdraw / ironPrice));
   const withdrawUnitPrice = Math.round((withdrawGross / withdrawIronUnits) * 100) / 100;
   const isFridayUtc = new Date().getUTCDay() === 5;
   const effectiveCanWithdraw = isFridayUtc || canWithdrawNow || isExempt;

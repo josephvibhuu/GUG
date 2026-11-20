@@ -15,7 +15,7 @@ export async function GET() {
 
 // The caller's address as Vercel reports it, for the wrong-password limit
 function clientIp(request: Request): string {
-  return (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || request.headers.get("x-real-ip") || "unknown";
+  return request.headers.get("x-real-ip")?.trim() || (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown";
 }
 
 export async function POST(request: Request) {
@@ -32,7 +32,7 @@ export async function POST(request: Request) {
 
     if (action === "register") {
       const { username, password, adminCode, acceptedTerms, referralCode } = body;
-      const res = await registerUser(username, password, adminCode, acceptedTerms, referralCode);
+      const res = await registerUser(username, password, adminCode, acceptedTerms, referralCode, clientIp(request));
       return NextResponse.json(res);
     }
 

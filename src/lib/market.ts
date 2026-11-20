@@ -59,6 +59,8 @@ export interface OrderBookData {
 export interface TradeItem {
   id: string;
   companyId: string;
+  buyOrderId?: string | null;
+  sellOrderId?: string | null;
   price: number;
   quantity: number;
   total: number;
@@ -434,6 +436,8 @@ export async function getRecentTrades(companyId: string, limit = 20): Promise<Tr
   return res.rows.map((r: any) => ({
     id: String(r.id),
     companyId: String(r.company_id),
+    buyOrderId: r.buy_order_id ? String(r.buy_order_id) : null,
+    sellOrderId: r.sell_order_id ? String(r.sell_order_id) : null,
     price: Number(r.price),
     quantity: Number(r.quantity),
     total: Number(r.total),
@@ -1164,16 +1168,17 @@ export async function executeShareBuyback(params: {
 
   const companyId = String(company.id);
 
-  // 3. Find open SELL orders on the book, lowest price first (not the buyer's own, e.g. the founder's unsold IPO float)
+  // 3. Find open secondary SELL orders on the book, lowest price first (exclude primary IPO float and caller's own orders)
   const sellOrdersRes = await db.execute({
     sql: `SELECT * FROM orders
-          WHERE company_id = ? AND type = 'SELL' AND status IN ('OPEN', 'PARTIAL') AND remaining_quantity > 0 AND user_id != ?
+          WHERE company_id = ? AND type = 'SELL' AND status IN ('OPEN', 'PARTIAL') AND remaining_quantity > 0
+            AND user_id != ? AND id != ('ord_ipo_' || ?)
           ORDER BY price ASC, created_at ASC`,
-    args: [companyId, params.founderId],
+    args: [companyId, params.founderId, companyId],
   });
 
   if (sellOrdersRes.rows.length === 0) {
-    return { success: false, message: `No open sell orders available on the book for $${company.ticker} to buy back.` };
+    return { success: false, message: `No open secondary sell orders available on the book for $${company.ticker} to buy back.` };
   }
 
   // Take the whole allocation from the founder's purse up front, only if it is still there
@@ -1185,6 +1190,9 @@ export async function executeShareBuyback(params: {
   if (escrow.rowsAffected === 0) {
     return { success: false, message: `Insufficient gold balance for a ${goldToSpend.toFixed(2)} gold buyback.` };
   }
+
+  const feePercentStr = await getSetting("trade_fee_percent", "1.0");
+  const feeRate = (parseFloat(feePercentStr) || 1.0) / 100;
 
   let remainingGold = goldToSpend;
   let totalSharesAcquired = 0;
@@ -1219,8 +1227,6 @@ export async function executeShareBuyback(params: {
     totalSharesAcquired += fillQty;
     lastFillPrice = askPrice;
 
-    const feePercentStr = await getSetting("trade_fee_percent", "1.0");
-    const feeRate = (parseFloat(feePercentStr) || 1.0) / 100;
     const fee = Math.round(cost * feeRate * 100) / 100;
     const netSellerProceeds = cost - fee;
 
@@ -1266,17 +1272,32 @@ export async function executeShareBuyback(params: {
     };
   }
 
-  // Update company metrics (retire shares, update price)
+  // Update company metrics (retire shares from both total_shares and float_shares, update price & volume)
   await db.execute({
     sql: `UPDATE companies 
           SET shares_bought_back = shares_bought_back + ?, 
               buyback_gold_spent = buyback_gold_spent + ?,
+              total_shares = MAX(1, total_shares - ?),
               float_shares = MAX(0, float_shares - ?),
               current_price = ?,
+              volume_24h = volume_24h + ?,
               high_24h = MAX(high_24h, ?),
               low_24h = MIN(low_24h, ?)
           WHERE id = ?`,
-    args: [totalSharesAcquired, totalGoldSpent, totalSharesAcquired, lastFillPrice, lastFillPrice, lastFillPrice, companyId],
+    args: [totalSharesAcquired, totalGoldSpent, totalSharesAcquired, totalSharesAcquired, lastFillPrice, totalGoldSpent, lastFillPrice, lastFillPrice, companyId],
+  });
+
+  // Update current hour candle
+  const currentHourBucket = now.slice(0, 13) + ":00:00Z";
+  await db.execute({
+    sql: `INSERT INTO candles (id, company_id, time_bucket, open, high, low, close, volume)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+          ON CONFLICT(company_id, time_bucket) DO UPDATE SET
+            high = MAX(candles.high, excluded.high),
+            low = MIN(candles.low, excluded.low),
+            close = excluded.close,
+            volume = candles.volume + 1`,
+    args: [`cnd_${crypto.randomUUID()}`, companyId, currentHourBucket, lastFillPrice, lastFillPrice, lastFillPrice, lastFillPrice],
   });
 
   const avgPrice = Math.round((totalGoldSpent / totalSharesAcquired) * 100) / 100;

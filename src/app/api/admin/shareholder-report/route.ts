@@ -8,6 +8,9 @@ export async function GET() {
     await initDb();
     const db = getDb();
     const user = await getCurrentUser();
+    if (!user || (!user.isAdmin && !user.isManager)) {
+      return NextResponse.json({ success: false, message: "Unauthorized" }, { status: 403 });
+    }
 
     const week2Cutoff = "2026-10-30T11:58:51.686Z";
     const nowIso = new Date().toISOString();

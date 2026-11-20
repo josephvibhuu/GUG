@@ -138,7 +138,7 @@ export async function isTradingAllowed(): Promise<{ allowed: boolean; reason?: s
   if (schedule.override === "force_closed") {
     return {
       allowed: false,
-      reason: `The Parlamentum Bourse trading floor is CLOSED due to the World War. All trading and order executions are suspended.`,
+      reason: `The Parlamentum Bourse trading floor is CLOSED${schedule.reason ? ` (${schedule.reason})` : ""}. All trading and order executions are suspended.`,
     };
   }
   return {

@@ -214,6 +214,13 @@ export async function distributeTradeReferralCommissions(trade: {
       const commissionGold = Math.round((partyFee * (commissionPct / 100)) * 100) / 100;
 
       if (commissionGold > 0) {
+        // Deduct from ExchangeTreasury (trade fee revenue-share) so no unbacked gold is created
+        const treasuryDebit = await db.execute({
+          sql: "UPDATE users SET cash_balance = ROUND(cash_balance - ?, 2) WHERE id = 'usr_treasury' AND cash_balance >= ?",
+          args: [commissionGold, commissionGold],
+        });
+        if (treasuryDebit.rowsAffected === 0) continue;
+
         // Credit gold to referrer's balance
         await db.execute({
           sql: "UPDATE users SET cash_balance = cash_balance + ? WHERE id = ?",

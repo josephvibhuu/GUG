@@ -69,16 +69,33 @@ const SESSION_COOKIE = {
   maxAge: 60 * 60 * 24 * 30, // 30 days
 };
 
-// Wrong passwords: at most 5 per name from one connection in 15 minutes, for both logging in and changing a password
+// Wrong passwords: at most 5 per name+IP (and 15 per name globally across IPs) in 15 minutes
 const MAX_FAILURES = 5;
+const MAX_USER_FAILURES = 15;
 const FAILURE_WINDOW_MS = 15 * 60_000;
 const attemptKey = (username: string, ip: string) => `${username.trim().toLowerCase()}|${ip}`;
+const userAttemptKey = (username: string) => `user:${username.trim().toLowerCase()}`;
 
-async function tooManyFailures(key: string): Promise<boolean> {
+function timingSafeMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const ha = crypto.createHash("sha256").update(a).digest();
+  const hb = crypto.createHash("sha256").update(b).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
+async function tooManyFailures(key: string, limit = MAX_FAILURES): Promise<boolean> {
   const res = await getDb().execute({ sql: "SELECT failures, window_start FROM login_attempts WHERE key = ?", args: [key] });
   if (res.rows.length === 0) return false;
   const r = res.rows[0];
-  return Date.now() - Number(r.window_start) < FAILURE_WINDOW_MS && Number(r.failures) >= MAX_FAILURES;
+  return Date.now() - Number(r.window_start) < FAILURE_WINDOW_MS && Number(r.failures) >= limit;
+}
+
+async function isRateLimited(username: string, ip: string): Promise<boolean> {
+  const [byIp, byUser] = await Promise.all([
+    tooManyFailures(attemptKey(username, ip), MAX_FAILURES),
+    tooManyFailures(userAttemptKey(username), MAX_USER_FAILURES),
+  ]);
+  return byIp || byUser;
 }
 
 async function recordFailure(key: string): Promise<void> {
@@ -92,8 +109,22 @@ async function recordFailure(key: string): Promise<void> {
   });
 }
 
+async function recordAuthFailure(username: string, ip: string): Promise<void> {
+  await Promise.all([
+    recordFailure(attemptKey(username, ip)),
+    recordFailure(userAttemptKey(username)),
+  ]);
+}
+
 async function clearFailures(key: string): Promise<void> {
   await getDb().execute({ sql: "DELETE FROM login_attempts WHERE key = ?", args: [key] });
+}
+
+async function clearAuthFailures(username: string, ip: string): Promise<void> {
+  await Promise.all([
+    clearFailures(attemptKey(username, ip)),
+    clearFailures(userAttemptKey(username)),
+  ]);
 }
 
 const TOO_MANY = "Too many wrong passwords. Wait 15 minutes and try again.";
@@ -163,7 +194,8 @@ export async function registerUser(
   password: string, 
   adminCode?: string,
   acceptedTerms?: boolean,
-  referralCode?: string
+  referralCode?: string,
+  ip = "unknown"
 ): Promise<{ success: boolean; message?: string; user?: UserSession }> {
   await initDb();
   const db = getDb();
@@ -177,6 +209,21 @@ export async function registerUser(
   }
   if (!acceptedTerms) {
     return { success: false, message: "You must accept the Terms & Conditions to register." };
+  }
+
+  let isAdmin = 0;
+  if (adminCode && adminCode.trim()) {
+    const adminAttemptKey = `admin_signup|${ip}`;
+    if (await tooManyFailures(adminAttemptKey)) {
+      return { success: false, message: "Too many invalid operator codes. Wait 15 minutes and try again." };
+    }
+    if (ADMIN_SECRET_CODE && timingSafeMatch(adminCode.trim(), ADMIN_SECRET_CODE)) {
+      isAdmin = 1;
+      await clearFailures(adminAttemptKey);
+    } else {
+      await recordFailure(adminAttemptKey);
+      return { success: false, message: "Invalid operator registration code." };
+    }
   }
 
   const existing = await db.execute({
@@ -201,8 +248,6 @@ export async function registerUser(
   const passwordHash = await bcrypt.hash(password, 10);
   const now = new Date().toISOString();
   
-  // Admin role granted if secret admin code matches
-  const isAdmin = ADMIN_SECRET_CODE && adminCode && adminCode.trim() === ADMIN_SECRET_CODE ? 1 : 0;
   const avatar = isAdmin ? "🏛️" : "🎩";
   const displayName = cleanUser;
 
@@ -282,8 +327,7 @@ export async function loginUser(
 ): Promise<{ success: boolean; message?: string; user?: UserSession }> {
   await initDb();
   const cleanUser = username.trim();
-  const attempts = attemptKey(cleanUser, ip);
-  if (await tooManyFailures(attempts)) {
+  if (await isRateLimited(cleanUser, ip)) {
     return { success: false, message: TOO_MANY };
   }
 
@@ -304,17 +348,17 @@ export async function loginUser(
   }
 
   if (res.rows.length === 0) {
-    await recordFailure(attempts);
+    await recordAuthFailure(cleanUser, ip);
     return { success: false, message: "Invalid citizen name or password." };
   }
 
   const u = res.rows[0];
   const valid = await bcrypt.compare(password, String(u.password_hash));
   if (!valid) {
-    await recordFailure(attempts);
+    await recordAuthFailure(cleanUser, ip);
     return { success: false, message: "Invalid citizen name or password." };
   }
-  await clearFailures(attempts);
+  await clearAuthFailures(cleanUser, ip);
 
   try {
     const cookieStore = await cookies();
@@ -428,8 +472,8 @@ export async function changePassword(
 ): Promise<{ success: boolean; message: string }> {
   await initDb();
   const db = getDb();
-  const attempts = attemptKey(String(username || ""), ip);
-  if (await tooManyFailures(attempts)) {
+  const cleanUser = String(username || "");
+  if (await isRateLimited(cleanUser, ip)) {
     return { success: false, message: TOO_MANY };
   }
 
@@ -439,21 +483,21 @@ export async function changePassword(
 
   const res = await db.execute({
     sql: "SELECT id, password_hash, session_epoch FROM users WHERE LOWER(username) = ?",
-    args: [String(username || "").trim().toLowerCase()],
+    args: [cleanUser.trim().toLowerCase()],
   });
   const wrong = { success: false, message: "That name and current password don't match." };
   if (res.rows.length === 0) {
-    await recordFailure(attempts);
+    await recordAuthFailure(cleanUser, ip);
     return wrong;
   }
 
   const u = res.rows[0];
   const oldHash = String(u.password_hash);
   if (!(await bcrypt.compare(String(currentPassword || ""), oldHash))) {
-    await recordFailure(attempts);
+    await recordAuthFailure(cleanUser, ip);
     return wrong;
   }
-  await clearFailures(attempts);
+  await clearAuthFailures(cleanUser, ip);
   if (await bcrypt.compare(newPassword, oldHash)) {
     return { success: false, message: "Pick a password different from the current one." };
   }
@@ -527,8 +571,8 @@ export async function resetPasswordWithCode(
 ): Promise<{ success: boolean; message: string }> {
   await initDb();
   const db = getDb();
-  const attempts = attemptKey(String(username || ""), ip);
-  if (await tooManyFailures(attempts)) {
+  const cleanUser = String(username || "");
+  if (await isRateLimited(cleanUser, ip)) {
     return { success: false, message: TOO_MANY };
   }
   if (typeof newPassword !== "string" || newPassword.length < 8 || newPassword.length > 200) {
@@ -537,11 +581,11 @@ export async function resetPasswordWithCode(
 
   const u = await db.execute({
     sql: "SELECT id, password_hash, session_epoch FROM users WHERE LOWER(username) = ?",
-    args: [String(username || "").trim().toLowerCase()],
+    args: [cleanUser.trim().toLowerCase()],
   });
   const wrong = { success: false, message: "That name and reset code don't match, or the code has run out or was used." };
   if (u.rows.length === 0) {
-    await recordFailure(attempts);
+    await recordAuthFailure(cleanUser, ip);
     return wrong;
   }
   const user = u.rows[0];
@@ -553,10 +597,10 @@ export async function resetPasswordWithCode(
     args: [now, hashCode(String(code || "")), String(user.id), now],
   });
   if (claim.rowsAffected === 0) {
-    await recordFailure(attempts);
+    await recordAuthFailure(cleanUser, ip);
     return wrong;
   }
-  await clearFailures(attempts);
+  await clearAuthFailures(cleanUser, ip);
 
   const newHash = await bcrypt.hash(newPassword, 10);
   await db.execute({

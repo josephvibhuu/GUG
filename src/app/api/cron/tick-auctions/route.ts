@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import crypto from "crypto";
 import { tickAuctions } from "@/lib/nft";
 import { getCurrentUser } from "@/lib/auth";
 
@@ -14,11 +15,18 @@ export async function POST(request: Request) {
   return handleTick(request);
 }
 
+function bearerMatches(authHeader: string, secret: string): boolean {
+  if (secret.length < 16 || !authHeader.startsWith("Bearer ")) return false;
+  const given = crypto.createHash("sha256").update(authHeader.slice(7)).digest();
+  const expected = crypto.createHash("sha256").update(secret).digest();
+  return crypto.timingSafeEqual(given, expected);
+}
+
 async function handleTick(request: Request) {
   try {
     const cronSecret = process.env.CRON_SECRET || "";
     const authHeader = request.headers.get("authorization") || "";
-    let authorized = cronSecret.length >= 16 && authHeader === `Bearer ${cronSecret}`;
+    let authorized = bearerMatches(authHeader, cronSecret);
 
     if (!authorized) {
       const user = await getCurrentUser();

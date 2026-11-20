@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import crypto from "crypto";
 import { watcherOn, watch, watchView } from "@/lib/watcher";
 import { getCurrentUser } from "@/lib/auth";
 
@@ -12,13 +13,20 @@ export async function POST(request: Request) {
   return handleSync(request);
 }
 
+function bearerMatches(authHeader: string, secret: string): boolean {
+  if (secret.length < 16 || !authHeader.startsWith("Bearer ")) return false;
+  const given = crypto.createHash("sha256").update(authHeader.slice(7)).digest();
+  const expected = crypto.createHash("sha256").update(secret).digest();
+  return crypto.timingSafeEqual(given, expected);
+}
+
 async function handleSync(request: Request) {
   try {
     // Vercel cron (and any outside scheduler) sends "Authorization: Bearer <CRON_SECRET>" when CRON_SECRET is set
     // in the project's environment variables. The API key and query-string keys are not accepted here.
     const cronSecret = process.env.CRON_SECRET || "";
     const authHeader = request.headers.get("authorization") || "";
-    let isAuthorized = cronSecret.length >= 16 && authHeader === `Bearer ${cronSecret}`;
+    let isAuthorized = bearerMatches(authHeader, cronSecret);
 
     if (!isAuthorized) {
       const user = await getCurrentUser();

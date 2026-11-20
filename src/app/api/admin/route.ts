@@ -178,10 +178,11 @@ export async function GET() {
     }
 
     const tradeVolume = Number(tradeStatsRow.total_volume || 0);
-    const tradeFeeRate = (Number(tradeFee) || 0.5) / 100;
+    const tradeFeeRate = (Number(tradeFee) || 1.0) / 100;
     const totalTradeFees = Math.round(tradeVolume * tradeFeeRate * 100) / 100;
-    const totalListingFees = companies.length * (Number(listingFee) || 200);
-    const totalPlatformProfit = Math.round((treasuryCash + totalTradeFees + totalListingFees) * 100) / 100;
+    const totalListingFees = Math.round(companies.reduce((sum, c) => sum + (c.ipoFeeCollected || 0), 0) * 100) / 100;
+    // usr_treasury already receives collected trade fees and IPO charter fees
+    const totalPlatformProfit = Math.round(treasuryCash * 100) / 100;
 
     const financialSummary = {
       operatorName: user.displayName || user.username,
@@ -288,12 +289,23 @@ export async function POST(request: Request) {
     }
 
     if (action === "create_reset_code") {
+      const targetId = String(body.userId || "");
+      if (!user.isAdmin) {
+        const db = getDb();
+        const targetRes = await db.execute({ sql: "SELECT is_admin FROM users WHERE id = ?", args: [targetId] });
+        if (targetRes.rows.length > 0 && Number(targetRes.rows[0].is_admin) === 1) {
+          return NextResponse.json({ success: false, message: "Only an Operator Admin can generate a reset code for another Admin." }, { status: 403 });
+        }
+      }
       const { createResetCode } = await import("@/lib/auth");
-      const res = await createResetCode(String(body.userId || ""), user.id);
+      const res = await createResetCode(targetId, user.id);
       return NextResponse.json(res, { status: res.success ? 200 : 400 });
     }
 
     if (action === "manual_credit") {
+      if (!user.isAdmin) {
+        return NextResponse.json({ success: false, message: "Forbidden: Operator Admin access required for manual gold credits." }, { status: 403 });
+      }
       const { parlamentumName, goldAmount, reason } = body;
       const amount = Number(goldAmount);
       if (!Number.isFinite(amount) || amount <= 0) {
@@ -306,6 +318,9 @@ export async function POST(request: Request) {
     }
 
     if (action === "adjust_user_balance") {
+      if (!user.isAdmin) {
+        return NextResponse.json({ success: false, message: "Forbidden: Operator Admin access required to edit balances." }, { status: 403 });
+      }
       const { userId, newBalance, reason } = body;
       const db = getDb();
       const targetBalance = Number(newBalance);
@@ -361,6 +376,9 @@ export async function POST(request: Request) {
     }
 
     if (action === "update_settings") {
+      if (!user.isAdmin) {
+        return NextResponse.json({ success: false, message: "Forbidden: Operator Admin access required to update exchange settings." }, { status: 403 });
+      }
       const { taxRate, houseName, tradeFee, listingFee, discordWebhookUrl, discordWhaleThreshold, discordAlertsEnabled } = body;
       if (taxRate !== undefined) await setSetting("tax_rate", String(taxRate));
       if (houseName !== undefined) await setSetting("house_name", String(houseName));
@@ -377,6 +395,9 @@ export async function POST(request: Request) {
     }
 
     if (action === "test_discord_webhook") {
+      if (!user.isAdmin) {
+        return NextResponse.json({ success: false, message: "Forbidden: Operator Admin access required." }, { status: 403 });
+      }
       const { webhookUrl } = body;
       const { sendDiscordEmbed } = await import("@/lib/discord");
       const testRes = await sendDiscordEmbed(
@@ -404,6 +425,9 @@ export async function POST(request: Request) {
     }
 
     if (action === "set_custom_referral_code") {
+      if (!user.isAdmin) {
+        return NextResponse.json({ success: false, message: "Forbidden: Operator Admin access required." }, { status: 403 });
+      }
       const { code, targetUsername, commissionPct } = body;
       const { adminSetCustomReferralCode } = await import("@/lib/referrals");
       const res = await adminSetCustomReferralCode({
@@ -415,6 +439,9 @@ export async function POST(request: Request) {
     }
 
     if (action === "register_discord_commands") {
+      if (!user.isAdmin) {
+        return NextResponse.json({ success: false, message: "Forbidden: Operator Admin access required." }, { status: 403 });
+      }
       const { botToken, clientId, guildId } = body;
       if (!botToken || !clientId) {
         return NextResponse.json({ success: false, message: "Bot Token and Client ID are required." }, { status: 400 });
@@ -615,8 +642,18 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: `Processed ${res.executedCount} scheduled Friday dividend distributions.`, ...res });
     }
 
+    if (action === "cancel_earnings_report") {
+      const { reportId } = body;
+      const { cancelEarningsReport } = await import("@/lib/dividends");
+      const res = await cancelEarningsReport(String(reportId || ""), user.id);
+      return NextResponse.json(res, { status: res.success ? 200 : 400 });
+    }
+
     if (action === "deposit_company_profit") {
       const { companyId, amount, notes, source } = body;
+      if (source === "DIRECT" && !user.isAdmin) {
+        return NextResponse.json({ success: false, message: "Forbidden: Only Operator Admins can inject direct corporate profits." }, { status: 403 });
+      }
       const { depositCompanyProfit } = await import("@/lib/dividends");
       const res = await depositCompanyProfit({
         companyId,

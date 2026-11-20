@@ -165,6 +165,10 @@ export async function mintNft(params: MintParams): Promise<{ success: boolean; m
 
   if (!params.title?.trim()) return { success: false, message: "Title is required." };
   if (!params.imageUrl?.trim()) return { success: false, message: "Image URL is required." };
+  const cleanImageUrl = params.imageUrl.trim();
+  if (!/^https:\/\/.+/i.test(cleanImageUrl) && !cleanImageUrl.startsWith("/nfts/")) {
+    return { success: false, message: "Image URL must be an https:// URL or a local /nfts/ asset." };
+  }
 
   const defaultRoyaltyBps = await getNftCreatorRoyaltyBps();
   const royaltyBps = params.creatorRoyaltyBps !== undefined
@@ -180,7 +184,7 @@ export async function mintNft(params: MintParams): Promise<{ success: boolean; m
   await db.execute({
     sql: `INSERT INTO nfts (id, title, description, image_url, creator_id, creator_name, current_owner_id, edition_note, creator_royalty_bps, status, minted_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OWNED', ?)`,
-    args: [id, params.title.trim(), params.description?.trim() || null, params.imageUrl.trim(),
+    args: [id, params.title.trim(), params.description?.trim() || null, cleanImageUrl,
       creatorId, creatorName, creatorId, params.editionNote?.trim() || null, royaltyBps, now],
   });
 
@@ -198,7 +202,7 @@ export async function mintNft(params: MintParams): Promise<{ success: boolean; m
     message: `NFT "${params.title.trim()}" minted successfully.`,
     nft: {
       id, title: params.title.trim(), description: params.description?.trim(),
-      imageUrl: params.imageUrl.trim(), creatorId, creatorName,
+      imageUrl: cleanImageUrl, creatorId, creatorName,
       currentOwnerId: creatorId, editionNote: params.editionNote?.trim(),
       creatorRoyaltyBps: royaltyBps, status: "OWNED", mintedAt: now,
     },
@@ -255,7 +259,10 @@ export async function createNftAuction(params: CreateAuctionParams): Promise<{ s
   const startsAtIso = startsAt.toISOString();
   const endsAtIso = endsAt.toISOString();
 
-  await db.execute({ sql: "UPDATE nfts SET status = 'IN_AUCTION' WHERE id = ? AND status = 'OWNED'", args: [params.nftId] });
+  const lockNft = await db.execute({ sql: "UPDATE nfts SET status = 'IN_AUCTION' WHERE id = ? AND status = 'OWNED'", args: [params.nftId] });
+  if (lockNft.rowsAffected === 0) {
+    return { success: false, message: "NFT is no longer available for auction." };
+  }
 
   await db.execute({
     sql: `INSERT INTO nft_auctions (id, nft_id, seller_id, reserve_price, start_price, current_bid, current_bidder_id,
@@ -371,10 +378,13 @@ export async function placeBid(params: PlaceBidParams): Promise<{ success: boole
     }
 
     if (diff !== 0) {
-      await db.execute({
+      const lockDiff = await db.execute({
         sql: "UPDATE users SET cash_balance = cash_balance - ?, locked_cash = locked_cash + ? WHERE id = ? AND cash_balance >= ?",
         args: [diff, diff, params.bidderId, diff > 0 ? diff : 0],
       });
+      if (lockDiff.rowsAffected === 0) {
+        return { success: false, message: `Insufficient gold to raise max proxy bid to ${maxBid.toLocaleString()} g.` };
+      }
     }
 
     await db.execute({
@@ -407,11 +417,14 @@ export async function placeBid(params: PlaceBidParams): Promise<{ success: boole
 
   const now = new Date().toISOString();
 
-  // Deduct challenger's maxBid from available cash into locked_cash
-  await db.execute({
+  // Deduct challenger's maxBid from available cash into locked_cash (atomic check)
+  const lockChallenger = await db.execute({
     sql: "UPDATE users SET cash_balance = cash_balance - ?, locked_cash = locked_cash + ? WHERE id = ? AND cash_balance >= ?",
     args: [maxBid, maxBid, params.bidderId, maxBid],
   });
+  if (lockChallenger.rowsAffected === 0) {
+    return { success: false, message: `Insufficient gold. You need ${maxBid.toLocaleString()} g available to back your bid.` };
+  }
 
   let winningBidderId = params.bidderId;
   let newCurrentBid = minNextBid;
@@ -446,9 +459,20 @@ export async function placeBid(params: PlaceBidParams): Promise<{ success: boole
       const incBump = Math.round((incumbentMax * (1 + minIncrementPct / 100)) * 100) / 100;
       newCurrentBid = Math.min(maxBid, incBump);
 
-      // Refund old incumbent
+      // Atomically claim old incumbent as OUTBID before refunding so concurrent bids cannot double-refund
       const refundAmt = Number(incumbent.max_bid || incumbent.amount);
-      await db.execute({ sql: "UPDATE nft_bids SET status = 'OUTBID' WHERE id = ?", args: [String(incumbent.id)] });
+      const claimInc = await db.execute({
+        sql: "UPDATE nft_bids SET status = 'OUTBID' WHERE id = ? AND status = 'ACTIVE'",
+        args: [String(incumbent.id)],
+      });
+      if (claimInc.rowsAffected === 0) {
+        // Concurrent bid already replaced the incumbent; refund this challenger and ask to retry
+        await db.execute({
+          sql: "UPDATE users SET cash_balance = cash_balance + ?, locked_cash = locked_cash - ? WHERE id = ?",
+          args: [maxBid, maxBid, params.bidderId],
+        });
+        return { success: false, message: "Another bid was placed at the same moment. Please try again." };
+      }
       await db.execute({
         sql: "UPDATE users SET cash_balance = cash_balance + ?, locked_cash = locked_cash - ? WHERE id = ?",
         args: [refundAmt, refundAmt, incumbentId],
@@ -552,6 +576,14 @@ export async function settleAuction(auctionId: string, byAdminId: string): Promi
   }
 
   const now = new Date().toISOString();
+  const claimAuc = await db.execute({
+    sql: "UPDATE nft_auctions SET status = 'SETTLED', settled_at = ? WHERE id = ? AND status IN ('ENDED', 'LIVE')",
+    args: [now, auctionId],
+  });
+  if (claimAuc.rowsAffected === 0) {
+    return { success: false, message: "Auction was already settled or cancelled." };
+  }
+
   const nftId = String(auc.nft_id);
   const sellerId = String(auc.seller_id);
 
@@ -571,10 +603,6 @@ export async function settleAuction(auctionId: string, byAdminId: string): Promi
       });
       await db.execute({ sql: "UPDATE nft_bids SET status = 'REFUNDED' WHERE id = ?", args: [String(row.id)] });
     }
-    await db.execute({
-      sql: "UPDATE nft_auctions SET status = 'SETTLED', settled_at = ? WHERE id = ?",
-      args: [now, auctionId],
-    });
     await db.execute({ sql: "UPDATE nfts SET status = 'OWNED' WHERE id = ?", args: [nftId] });
     scheduleBlobPersist();
     return { success: true, message: "Auction settled — reserve not met. NFT returned to seller.", sold: false };
@@ -645,22 +673,27 @@ export async function settleAuction(auctionId: string, byAdminId: string): Promi
     args: [winnerId, nftId],
   });
 
-  // 6. Mark auction settled + winning bid won
-  await db.execute({
-    sql: "UPDATE nft_auctions SET status = 'SETTLED', settled_at = ? WHERE id = ?",
-    args: [now, auctionId],
-  });
+  // 6. Mark winning bid won & reject any stale open offers on this NFT
   await db.execute({
     sql: "UPDATE nft_bids SET status = 'WON' WHERE auction_id = ? AND bidder_id = ? AND status = 'ACTIVE'",
     args: [auctionId, winnerId],
   });
+  const staleOffers = await db.execute({
+    sql: "SELECT id, buyer_id, amount FROM nft_offers WHERE nft_id = ? AND status = 'ACTIVE'",
+    args: [nftId],
+  });
+  for (const o of staleOffers.rows) {
+    const oClaim = await db.execute({ sql: "UPDATE nft_offers SET status = 'REJECTED' WHERE id = ? AND status = 'ACTIVE'", args: [String(o.id)] });
+    if (oClaim.rowsAffected > 0) {
+      const oAmt = Number(o.amount);
+      await db.execute({
+        sql: "UPDATE users SET cash_balance = cash_balance + ?, locked_cash = locked_cash - ? WHERE id = ?",
+        args: [oAmt, oAmt, String(o.buyer_id)],
+      });
+    }
+  }
 
   // 7. Provenance
-  const sellerNameRes = await db.execute({ sql: "SELECT display_name, username FROM users WHERE id = ?", args: [sellerId] });
-  const sellerName = sellerNameRes.rows.length > 0
-    ? String(sellerNameRes.rows[0].display_name || sellerNameRes.rows[0].username)
-    : sellerId;
-
   await db.execute({
     sql: `INSERT INTO nft_history (id, nft_id, event, from_user_id, to_user_id, price, auction_id, note, created_at)
           VALUES (?, ?, 'SOLD', ?, ?, ?, ?, ?, ?)`,
@@ -698,6 +731,14 @@ export async function cancelAuction(auctionId: string, byAdminId: string): Promi
     return { success: false, message: `Cannot cancel a ${auc.status} auction.` };
   }
 
+  const claimCancel = await db.execute({
+    sql: "UPDATE nft_auctions SET status = 'CANCELLED' WHERE id = ? AND status IN ('SCHEDULED', 'LIVE')",
+    args: [auctionId],
+  });
+  if (claimCancel.rowsAffected === 0) {
+    return { success: false, message: "Auction was already cancelled or settled." };
+  }
+
   const activeBids = await db.execute({
     sql: "SELECT id, bidder_id, amount, max_bid FROM nft_bids WHERE auction_id = ? AND status = 'ACTIVE'",
     args: [auctionId],
@@ -711,7 +752,6 @@ export async function cancelAuction(auctionId: string, byAdminId: string): Promi
     await db.execute({ sql: "UPDATE nft_bids SET status = 'REFUNDED' WHERE id = ?", args: [String(row.id)] });
   }
 
-  await db.execute({ sql: "UPDATE nft_auctions SET status = 'CANCELLED' WHERE id = ?", args: [auctionId] });
   await db.execute({ sql: "UPDATE nfts SET status = 'OWNED' WHERE id = ?", args: [String(auc.nft_id)] });
   scheduleBlobPersist();
 
@@ -752,10 +792,13 @@ export async function listNftForSale(
   const listingId = `list_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
   const now = new Date().toISOString();
 
-  await db.execute({
+  const lockNft = await db.execute({
     sql: "UPDATE nfts SET status = 'LISTED_FOR_SALE' WHERE id = ? AND status = 'OWNED'",
     args: [nftId],
   });
+  if (lockNft.rowsAffected === 0) {
+    return { success: false, message: "NFT is no longer available to list." };
+  }
 
   await db.execute({
     sql: `INSERT INTO nft_listings (id, nft_id, seller_id, price, status, created_at) VALUES (?, ?, ?, ?, 'ACTIVE', ?)`,
@@ -790,7 +833,13 @@ export async function cancelNftListing(
   const l = listRes.rows[0];
   if (String(l.status) !== "ACTIVE") return { success: false, message: "Listing is no longer active." };
 
-  await db.execute({ sql: "UPDATE nft_listings SET status = 'CANCELLED' WHERE id = ?", args: [listingId] });
+  const claimCancel = await db.execute({
+    sql: "UPDATE nft_listings SET status = 'CANCELLED' WHERE id = ? AND seller_id = ? AND status = 'ACTIVE'",
+    args: [listingId, userId],
+  });
+  if (claimCancel.rowsAffected === 0) {
+    return { success: false, message: "Listing was already sold or cancelled." };
+  }
   await db.execute({ sql: "UPDATE nfts SET status = 'OWNED' WHERE id = ?", args: [String(l.nft_id)] });
 
   scheduleBlobPersist();
@@ -824,7 +873,7 @@ export async function buyNftListing(
     return { success: false, message: `Insufficient gold. Price is ${price.toLocaleString()} g, you have ${available.toLocaleString()} g available.` };
   }
 
-  // Deduct from buyer
+  // Deduct from buyer atomically
   const debitRes = await db.execute({
     sql: "UPDATE users SET cash_balance = cash_balance - ? WHERE id = ? AND cash_balance >= ?",
     args: [price, buyerId, price],
@@ -834,6 +883,16 @@ export async function buyNftListing(
   }
 
   const now = new Date().toISOString();
+
+  // Atomically claim the listing before paying seller / transferring NFT
+  const claimListing = await db.execute({
+    sql: "UPDATE nft_listings SET status = 'SOLD', completed_at = ? WHERE id = ? AND status = 'ACTIVE'",
+    args: [now, listingId],
+  });
+  if (claimListing.rowsAffected === 0) {
+    await db.execute({ sql: "UPDATE users SET cash_balance = cash_balance + ? WHERE id = ?", args: [price, buyerId] });
+    return { success: false, message: "This listing was just sold or cancelled." };
+  }
 
   // Splits: 15% house cut, creator royalty (if secondary)
   const nftRes = await db.execute({ sql: "SELECT creator_id, creator_royalty_bps FROM nfts WHERE id = ?", args: [nftId] });
@@ -856,9 +915,22 @@ export async function buyNftListing(
   // Credit seller
   await db.execute({ sql: "UPDATE users SET cash_balance = cash_balance + ? WHERE id = ?", args: [sellerNet, sellerId] });
 
-  // Update listing & NFT
-  await db.execute({ sql: "UPDATE nft_listings SET status = 'SOLD', completed_at = ? WHERE id = ?", args: [now, listingId] });
+  // Transfer NFT & refund any open offers on this NFT
   await db.execute({ sql: "UPDATE nfts SET current_owner_id = ?, status = 'OWNED' WHERE id = ?", args: [buyerId, nftId] });
+  const staleOffers = await db.execute({
+    sql: "SELECT id, buyer_id, amount FROM nft_offers WHERE nft_id = ? AND status = 'ACTIVE'",
+    args: [nftId],
+  });
+  for (const o of staleOffers.rows) {
+    const oClaim = await db.execute({ sql: "UPDATE nft_offers SET status = 'REJECTED' WHERE id = ? AND status = 'ACTIVE'", args: [String(o.id)] });
+    if (oClaim.rowsAffected > 0) {
+      const oAmt = Number(o.amount);
+      await db.execute({
+        sql: "UPDATE users SET cash_balance = cash_balance + ?, locked_cash = locked_cash - ? WHERE id = ?",
+        args: [oAmt, oAmt, String(o.buyer_id)],
+      });
+    }
+  }
 
   // Provenance
   await db.execute({
@@ -960,13 +1032,21 @@ export async function cancelPrivateOffer(
   const offer = offRes.rows[0];
   const amount = Number(offer.amount);
 
+  // Claim cancellation first so concurrent accept/cancel can't both act
+  const claim = await db.execute({
+    sql: "UPDATE nft_offers SET status = 'CANCELLED' WHERE id = ? AND buyer_id = ? AND status = 'ACTIVE'",
+    args: [offerId, buyerId],
+  });
+  if (claim.rowsAffected === 0) {
+    return { success: false, message: "Offer was already accepted, rejected, or cancelled." };
+  }
+
   // Refund locked cash
   await db.execute({
     sql: "UPDATE users SET cash_balance = cash_balance + ?, locked_cash = locked_cash - ? WHERE id = ?",
     args: [amount, amount, buyerId],
   });
 
-  await db.execute({ sql: "UPDATE nft_offers SET status = 'CANCELLED' WHERE id = ?", args: [offerId] });
   scheduleBlobPersist();
 
   return { success: true, message: `Offer cancelled. ${amount.toLocaleString()} g returned to your purse.` };
@@ -996,6 +1076,16 @@ export async function acceptPrivateOffer(
     return { success: false, message: "Cannot accept offers while NFT is in an active auction." };
   }
 
+  const now = new Date().toISOString();
+  // Claim offer as ACCEPTED first before moving funds
+  const claimOffer = await db.execute({
+    sql: "UPDATE nft_offers SET status = 'ACCEPTED', completed_at = ? WHERE id = ? AND status = 'ACTIVE'",
+    args: [now, offerId],
+  });
+  if (claimOffer.rowsAffected === 0) {
+    return { success: false, message: "Offer is no longer active." };
+  }
+
   const buyerId = String(row.buyer_id);
   const nftId = String(row.nft_id);
   const amount = Number(row.amount);
@@ -1007,8 +1097,6 @@ export async function acceptPrivateOffer(
   const houseCut = Math.round(amount * houseCutBps / 10000 * 100) / 100;
   const creatorRoyalty = isPrimary ? 0 : Math.round(amount * creatorRoyaltyBps / 10000 * 100) / 100;
   const sellerNet = Math.round((amount - houseCut - creatorRoyalty) * 100) / 100;
-
-  const now = new Date().toISOString();
 
   // Deduct buyer's locked cash
   await db.execute({
@@ -1042,24 +1130,23 @@ export async function acceptPrivateOffer(
     args: [nftId],
   });
 
-  // Mark this offer ACCEPTED
-  await db.execute({
-    sql: "UPDATE nft_offers SET status = 'ACCEPTED', completed_at = ? WHERE id = ?",
-    args: [now, offerId],
-  });
-
   // Reject and refund other active offers for this NFT
   const otherOffers = await db.execute({
     sql: "SELECT id, buyer_id, amount FROM nft_offers WHERE nft_id = ? AND id != ? AND status = 'ACTIVE'",
     args: [nftId, offerId],
   });
   for (const o of otherOffers.rows) {
-    const oAmt = Number(o.amount);
-    await db.execute({
-      sql: "UPDATE users SET cash_balance = cash_balance + ?, locked_cash = locked_cash - ? WHERE id = ?",
-      args: [oAmt, oAmt, String(o.buyer_id)],
+    const oClaim = await db.execute({
+      sql: "UPDATE nft_offers SET status = 'REJECTED' WHERE id = ? AND status = 'ACTIVE'",
+      args: [String(o.id)],
     });
-    await db.execute({ sql: "UPDATE nft_offers SET status = 'REJECTED' WHERE id = ?", args: [String(o.id)] });
+    if (oClaim.rowsAffected > 0) {
+      const oAmt = Number(o.amount);
+      await db.execute({
+        sql: "UPDATE users SET cash_balance = cash_balance + ?, locked_cash = locked_cash - ? WHERE id = ?",
+        args: [oAmt, oAmt, String(o.buyer_id)],
+      });
+    }
   }
 
   // Transfer NFT
@@ -1106,6 +1193,15 @@ export async function rejectPrivateOffer(
     return { success: false, message: "You are not the owner of this NFT." };
   }
 
+  // Claim rejection first so concurrent cancel/accept can't double-refund
+  const claim = await db.execute({
+    sql: "UPDATE nft_offers SET status = 'REJECTED' WHERE id = ? AND status = 'ACTIVE'",
+    args: [offerId],
+  });
+  if (claim.rowsAffected === 0) {
+    return { success: false, message: "Offer was already processed." };
+  }
+
   const amount = Number(offer.amount);
   const buyerId = String(offer.buyer_id);
 
@@ -1115,7 +1211,6 @@ export async function rejectPrivateOffer(
     args: [amount, amount, buyerId],
   });
 
-  await db.execute({ sql: "UPDATE nft_offers SET status = 'REJECTED' WHERE id = ?", args: [offerId] });
   scheduleBlobPersist();
 
   return { success: true, message: "Offer rejected and buyer's funds refunded." };
@@ -1140,31 +1235,50 @@ export async function getUserVaultNfts(userId: string): Promise<{
     args: [userId],
   });
 
-  const vault = await Promise.all(
-    nftsRes.rows.map(async (r) => {
-      const nft = mapNft(r);
-      const [listRes, offersRes] = await Promise.all([
-        db.execute({ sql: "SELECT * FROM nft_listings WHERE nft_id = ? AND status = 'ACTIVE' LIMIT 1", args: [nft.id] }),
-        db.execute({ sql: "SELECT COUNT(*) as cnt FROM nft_offers WHERE nft_id = ? AND status = 'ACTIVE'", args: [nft.id] }),
-      ]);
-      const activeListing = listRes.rows.length > 0 ? (listRes.rows[0] as any) : null;
-      const activeOffersCount = offersRes.rows.length > 0 ? Number(offersRes.rows[0].cnt) : 0;
-      return {
-        ...nft,
-        activeListing: activeListing
-          ? {
-              id: String(activeListing.id),
-              nftId: String(activeListing.nft_id),
-              sellerId: String(activeListing.seller_id),
-              price: Number(activeListing.price),
-              status: activeListing.status,
-              createdAt: String(activeListing.created_at),
-            }
-          : null,
-        activeOffersCount,
-      };
-    })
-  );
+  const [allListingsRes, allOffersCountRes] = await Promise.all([
+    db.execute({
+      sql: `SELECT l.* FROM nft_listings l
+            JOIN nfts n ON l.nft_id = n.id
+            WHERE n.current_owner_id = ? AND l.status = 'ACTIVE'`,
+      args: [userId],
+    }),
+    db.execute({
+      sql: `SELECT o.nft_id, COUNT(*) as cnt FROM nft_offers o
+            JOIN nfts n ON o.nft_id = n.id
+            WHERE n.current_owner_id = ? AND o.status = 'ACTIVE'
+            GROUP BY o.nft_id`,
+      args: [userId],
+    }),
+  ]);
+
+  const listingByNft = new Map<string, any>();
+  for (const l of allListingsRes.rows as any[]) {
+    listingByNft.set(String(l.nft_id), l);
+  }
+  const offerCountByNft = new Map<string, number>();
+  for (const c of allOffersCountRes.rows as any[]) {
+    offerCountByNft.set(String(c.nft_id), Number(c.cnt) || 0);
+  }
+
+  const vault = nftsRes.rows.map((r) => {
+    const nft = mapNft(r);
+    const activeListing = listingByNft.get(nft.id) || null;
+    const activeOffersCount = offerCountByNft.get(nft.id) || 0;
+    return {
+      ...nft,
+      activeListing: activeListing
+        ? {
+            id: String(activeListing.id),
+            nftId: String(activeListing.nft_id),
+            sellerId: String(activeListing.seller_id),
+            price: Number(activeListing.price),
+            status: activeListing.status,
+            createdAt: String(activeListing.created_at),
+          }
+        : null,
+      activeOffersCount,
+    };
+  });
 
   // Offers received for user's owned NFTs
   const receivedRes = await db.execute({

@@ -149,11 +149,15 @@ export async function redeemStockGift(
     return invalid;
   }
 
-  // Credit shares into recipient's portfolio
+  // Credit shares into recipient's portfolio (gifted shares have 0 cost basis)
   await db.execute({
     sql: `INSERT INTO portfolios (id, user_id, company_id, shares, locked_shares, avg_buy_price)
           VALUES (?, ?, ?, ?, 0, 0.0)
-          ON CONFLICT(user_id, company_id) DO UPDATE SET shares = shares + excluded.shares`,
+          ON CONFLICT(user_id, company_id) DO UPDATE SET
+            avg_buy_price = CASE WHEN portfolios.shares + excluded.shares > 0
+              THEN ROUND((portfolios.shares * portfolios.avg_buy_price) / (portfolios.shares + excluded.shares), 2)
+              ELSE 0.0 END,
+            shares = portfolios.shares + excluded.shares`,
     args: [portId, userId, companyId, shares],
   });
 

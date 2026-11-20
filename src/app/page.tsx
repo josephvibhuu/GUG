@@ -111,7 +111,7 @@ export default function HomePage() {
                   {!loaded &&
                     [0, 1, 2].map((i) => (
                       <tr key={i} className="border-b border-rule last:border-0">
-                        <td colSpan={7} className="h-[57px]">
+                        <td colSpan={8} className="h-[57px]">
                           <div className="mx-4 h-3 w-40 rounded bg-pane" />
                         </td>
                       </tr>
@@ -166,7 +166,7 @@ export default function HomePage() {
                   ))}
                   {loaded && companies.length > 0 && rows.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="py-6 px-4 text-ash">No company matches “{query}”.</td>
+                      <td colSpan={8} className="py-6 px-4 text-ash">No company matches “{query}”.</td>
                     </tr>
                   )}
                 </tbody>
@@ -179,7 +179,8 @@ export default function HomePage() {
         </section>
 
         <section aria-labelledby="next" className="border-t border-rule pt-5 flex flex-wrap items-baseline gap-x-6 gap-y-2 text-[13px]">
-          <h2 id="next" className="text-ash">Coming soon</h2>`n          <Link href="/auction" className="text-paper hover:text-zinc-50 underline underline-offset-4 decoration-rule">Auction House</Link>
+          <h2 id="next" className="text-ash">Coming soon</h2>
+          <Link href="/auction" className="text-paper hover:text-zinc-50 underline underline-offset-4 decoration-rule">Auction House</Link>
           <Link href="/crypto" className="text-paper hover:text-zinc-50 underline underline-offset-4 decoration-rule">BREADCOIN</Link>
           <Link href="/funds" className="text-paper hover:text-zinc-50 underline underline-offset-4 decoration-rule">GUG funds</Link>
         </section>

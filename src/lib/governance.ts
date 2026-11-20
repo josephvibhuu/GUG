@@ -35,7 +35,7 @@ export async function getCompanyMotions(ticker: string, currentUserId?: string):
   const upperTicker = ticker.toUpperCase();
 
   const compRes = await db.execute({
-    sql: "SELECT id, ticker, name, creator_id, total_shares FROM companies WHERE ticker = ?",
+    sql: "SELECT id, ticker, name, creator_id, co_founder_id, total_shares FROM companies WHERE ticker = ?",
     args: [upperTicker],
   });
 
@@ -46,7 +46,7 @@ export async function getCompanyMotions(ticker: string, currentUserId?: string):
   const comp = compRes.rows[0];
   const companyId = String(comp.id);
   const totalCompanyShares = Number(comp.total_shares) || 10000;
-  const isFounder = !!currentUserId && String(comp.creator_id) === String(currentUserId);
+  const isFounder = !!currentUserId && (String(comp.creator_id) === String(currentUserId) || (Boolean(comp.co_founder_id) && String(comp.co_founder_id) === String(currentUserId)));
 
   let userShares = 0;
   if (currentUserId) {
@@ -56,10 +56,32 @@ export async function getCompanyMotions(ticker: string, currentUserId?: string):
     }
   }
 
-  const motionsRes = await db.execute({
-    sql: `SELECT * FROM company_motions WHERE company_id = ? ORDER BY created_at DESC`,
-    args: [companyId],
-  });
+  const [motionsRes, allVotesRes] = await Promise.all([
+    db.execute({
+      sql: `SELECT * FROM company_motions WHERE company_id = ? ORDER BY created_at DESC`,
+      args: [companyId],
+    }),
+    db.execute({
+      sql: `SELECT v.motion_id, v.user_id, v.choice, v.shares_voted, COALESCE(p.shares, 0) as live_shares
+            FROM company_motion_votes v
+            JOIN company_motions m ON v.motion_id = m.id
+            LEFT JOIN portfolios p ON p.user_id = v.user_id AND p.company_id = m.company_id
+            WHERE m.company_id = ?`,
+      args: [companyId],
+    }),
+  ]);
+
+  const votesByMotion = new Map<string, Array<{ userId: string; choice: string; sharesVoted: number; liveShares: number }>>();
+  for (const v of allVotesRes.rows) {
+    const mId = String(v.motion_id);
+    if (!votesByMotion.has(mId)) votesByMotion.set(mId, []);
+    votesByMotion.get(mId)!.push({
+      userId: String(v.user_id),
+      choice: String(v.choice),
+      sharesVoted: Number(v.shares_voted) || 0,
+      liveShares: Number(v.live_shares) || 0,
+    });
+  }
 
   const nowIso = new Date().toISOString();
   const motions: CompanyMotion[] = [];
@@ -70,31 +92,30 @@ export async function getCompanyMotions(ticker: string, currentUserId?: string):
     const endsAt = String(row.ends_at);
     const quorumPct = Number(row.quorum_pct) || 10;
 
-    // Get aggregated vote counts
-    const votesRes = await db.execute({
-      sql: `SELECT choice, SUM(shares_voted) as total_shares, COUNT(*) as voters_count 
-            FROM company_motion_votes WHERE motion_id = ? GROUP BY choice`,
-      args: [id],
-    });
-
+    const motionVotes = votesByMotion.get(id) || [];
     let yesShares = 0;
     let noShares = 0;
     let abstainShares = 0;
     let votersCount = 0;
+    let userVote: "YES" | "NO" | "ABSTAIN" | undefined;
 
-    for (const v of votesRes.rows) {
-      const choice = String(v.choice);
-      const sum = Number(v.total_shares) || 0;
-      const count = Number(v.voters_count) || 0;
-      votersCount += count;
-      if (choice === "YES") yesShares = sum;
-      else if (choice === "NO") noShares = sum;
-      else if (choice === "ABSTAIN") abstainShares = sum;
+    for (const v of motionVotes) {
+      // While ACTIVE, weight each vote by the voter's current shareholding so transferred shares can't vote twice
+      const weight = status === "ACTIVE" ? v.liveShares : v.sharesVoted;
+      if (weight > 0 || status !== "ACTIVE") {
+        votersCount++;
+        if (v.choice === "YES") yesShares += weight;
+        else if (v.choice === "NO") noShares += weight;
+        else if (v.choice === "ABSTAIN") abstainShares += weight;
+      }
+      if (currentUserId && v.userId === currentUserId) {
+        userVote = v.choice as "YES" | "NO" | "ABSTAIN";
+      }
     }
 
     const totalVotedShares = yesShares + noShares + abstainShares;
 
-    // Check if motion has ended and auto-update status
+    // Check if motion has ended and auto-update status (snapshotting live shares at close)
     if (status === "ACTIVE" && nowIso > endsAt) {
       const quorumMet = (totalVotedShares / totalCompanyShares) >= (quorumPct / 100);
       if (quorumMet && yesShares > noShares) {
@@ -106,22 +127,14 @@ export async function getCompanyMotions(ticker: string, currentUserId?: string):
       }
 
       await db.execute({
-        sql: "UPDATE company_motions SET status = ? WHERE id = ?",
+        sql: `UPDATE company_motion_votes SET shares_voted = COALESCE((SELECT shares FROM portfolios WHERE user_id = company_motion_votes.user_id AND company_id = ?), 0) WHERE motion_id = ?`,
+        args: [companyId, id],
+      });
+      await db.execute({
+        sql: "UPDATE company_motions SET status = ? WHERE id = ? AND status = 'ACTIVE'",
         args: [status, id],
       });
       scheduleBlobPersist();
-    }
-
-    // Check current user's vote if logged in
-    let userVote: "YES" | "NO" | "ABSTAIN" | undefined;
-    if (currentUserId) {
-      const userVoteRes = await db.execute({
-        sql: "SELECT choice FROM company_motion_votes WHERE motion_id = ? AND user_id = ?",
-        args: [id, currentUserId],
-      });
-      if (userVoteRes.rows.length > 0) {
-        userVote = String(userVoteRes.rows[0].choice) as any;
-      }
     }
 
     motions.push({
@@ -165,7 +178,7 @@ export async function createCompanyMotion(params: {
   const upperTicker = params.ticker.toUpperCase();
 
   const compRes = await db.execute({
-    sql: "SELECT id, ticker, name, creator_id FROM companies WHERE ticker = ?",
+    sql: "SELECT id, ticker, name, creator_id, co_founder_id FROM companies WHERE ticker = ?",
     args: [upperTicker],
   });
 
@@ -177,14 +190,15 @@ export async function createCompanyMotion(params: {
   const companyId = String(comp.id);
   const companyName = String(comp.name);
 
-  // Check if caller is founder or manager
+  // Check if caller is founder, co-founder, or admin
   const userRes = await db.execute({
     sql: "SELECT is_admin FROM users WHERE id = ?",
     args: [params.userId],
   });
   const isAdmin = userRes.rows.length > 0 && Number(userRes.rows[0].is_admin) === 1;
+  const isFounder = String(comp.creator_id) === String(params.userId) || (comp.co_founder_id && String(comp.co_founder_id) === String(params.userId));
 
-  if (String(comp.creator_id) !== String(params.userId) && !isAdmin) {
+  if (!isFounder && !isAdmin) {
     return { success: false, error: "Only the company founder or exchange operator can propose proxy motions." };
   }
 

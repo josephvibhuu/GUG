@@ -39,18 +39,36 @@ export async function POST(request: Request) {
     const imageFile = formData.get("image") as File | null;
     let imageUrl = String(formData.get("image_url") || "").trim();
 
+    const ALLOWED_IMAGE_MIMES: Record<string, string> = {
+      "image/jpeg": "jpg",
+      "image/jpg": "jpg",
+      "image/png": "png",
+      "image/webp": "webp",
+      "image/gif": "gif",
+    };
+    const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
+
     if (imageFile && imageFile.size > 0) {
+      if (imageFile.size > MAX_IMAGE_BYTES) {
+        return NextResponse.json({ success: false, message: "Image must be 5 MB or smaller." }, { status: 400 });
+      }
+      const ext = ALLOWED_IMAGE_MIMES[imageFile.type.toLowerCase()];
+      if (!ext) {
+        return NextResponse.json({ success: false, message: "Unsupported image type. Use JPEG, PNG, WebP, or GIF." }, { status: 400 });
+      }
       const token = process.env.BLOB_READ_WRITE_TOKEN;
       if (!token) {
         return NextResponse.json({ success: false, message: "BLOB_READ_WRITE_TOKEN not configured." }, { status: 500 });
       }
-      const ext = imageFile.name.split(".").pop()?.toLowerCase() || "jpg";
       const safeName = `nfts/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
       const blob = await put(safeName, imageFile, { access: "public", token });
       imageUrl = blob.url;
     }
 
     if (!imageUrl) return NextResponse.json({ success: false, message: "Image is required." }, { status: 400 });
+    if (!/^https:\/\/.+/i.test(imageUrl) && !imageUrl.startsWith("/nfts/")) {
+      return NextResponse.json({ success: false, message: "Image URL must be an https:// URL or a local /nfts/ asset." }, { status: 400 });
+    }
 
     const result = await mintNft({
       adminId: user.id,

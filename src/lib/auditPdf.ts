@@ -255,7 +255,8 @@ export function generateAuditLedgerPdf(data: AuditLedgerData) {
   doc.setFontSize(8.5);
   doc.setFont("helvetica", "italic");
   doc.setTextColor(80, 80, 80);
-  const vaultRule = "* VAULT RULE: As long as your in-game character holds at least 13,588.39 g, 100% of all player balances and company treasuries are safe. Any gold in your in-game wallet above 13,588.39 g is YOUR earned profit to keep or spend freely.";
+  const backingStr = fmt(data.requiredInGameReserves.totalCustomerBackingRequired);
+  const vaultRule = `* VAULT RULE: As long as your in-game character holds at least ${backingStr} g, 100% of all player balances and company treasuries are safe. Any gold in your in-game wallet above ${backingStr} g is YOUR earned profit to keep or spend freely.`;
   const splitRule = doc.splitTextToSize(vaultRule, 515);
   doc.text(splitRule, 40, currentY);
   currentY += splitRule.length * 11 + 18;

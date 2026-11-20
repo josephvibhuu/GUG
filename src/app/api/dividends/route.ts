@@ -5,6 +5,7 @@ import {
   reportEarningsAndDividend, 
   executeDividendPayout, 
   processScheduledDividends, 
+  cancelEarningsReport,
   getNextFridayUtc 
 } from "@/lib/dividends";
 
@@ -93,8 +94,20 @@ export async function POST(request: Request) {
     }
 
     if (action === "process_scheduled") {
+      if (!user.isAdmin && !user.isManager) {
+        return NextResponse.json({ success: false, message: "Only operators can manually trigger scheduled dividend sweeps." }, { status: 403 });
+      }
       const res = await processScheduledDividends();
       return NextResponse.json({ success: true, message: `Processed ${res.executedCount} scheduled Friday dividend distributions.`, ...res });
+    }
+
+    if (action === "cancel_report") {
+      const { reportId } = body;
+      if (!reportId) {
+        return NextResponse.json({ success: false, message: "Report ID is required." }, { status: 400 });
+      }
+      const res = await cancelEarningsReport(String(reportId), user.id);
+      return NextResponse.json(res, { status: res.success ? 200 : 400 });
     }
 
     return NextResponse.json({ success: false, message: "Invalid action." }, { status: 400 });

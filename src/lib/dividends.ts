@@ -640,3 +640,49 @@ export async function processScheduledDividends(): Promise<{ executedCount: numb
 
   return { executedCount };
 }
+
+/**
+ * Cancel a scheduled (not yet distributed) earnings report so a founder or operator can amend it
+ */
+export async function cancelEarningsReport(
+  reportId: string,
+  callerId: string
+): Promise<{ success: boolean; message: string }> {
+  await initDb();
+  const db = getDb();
+
+  const repRes = await db.execute({
+    sql: `SELECT e.id, e.status, e.company_id, c.creator_id, c.co_founder_id, c.ticker
+          FROM earnings_reports e
+          JOIN companies c ON e.company_id = c.id
+          WHERE e.id = ?`,
+    args: [reportId],
+  });
+  if (repRes.rows.length === 0) {
+    return { success: false, message: "Earnings report not found." };
+  }
+  const rep = repRes.rows[0];
+  if (rep.status !== "SCHEDULED") {
+    return { success: false, message: `Only scheduled reports can be cancelled (current status: ${rep.status}).` };
+  }
+
+  const userRes = await db.execute({ sql: "SELECT is_admin, account_type FROM users WHERE id = ?", args: [callerId] });
+  const isAdmin = userRes.rows.length > 0 && Number(userRes.rows[0].is_admin) === 1;
+  const isManager = userRes.rows.length > 0 && String(userRes.rows[0].account_type) === "MANAGER";
+  const isFounder = String(rep.creator_id) === callerId || (rep.co_founder_id && String(rep.co_founder_id) === callerId);
+
+  if (!isFounder && !isAdmin && !isManager) {
+    return { success: false, message: "Only the company founder or an operator can cancel a scheduled earnings report." };
+  }
+
+  const upd = await db.execute({
+    sql: "UPDATE earnings_reports SET status = 'CANCELLED' WHERE id = ? AND status = 'SCHEDULED'",
+    args: [reportId],
+  });
+  if (upd.rowsAffected === 0) {
+    return { success: false, message: "Report was already distributed or cancelled." };
+  }
+
+  scheduleBlobPersist();
+  return { success: true, message: `Scheduled earnings report for $${rep.ticker} cancelled. You may now file an amended report.` };
+}

@@ -115,19 +115,19 @@ function Terminal({ ticker }: { ticker: string }) {
       if (body !== lastBody.current) {
         lastBody.current = body;
 
-        // Detect filled orders: IDs that were open before but are gone now
+        // Detect filled orders: IDs that were open before and now appear in recentTrades
         const newOrderIds = new Set<string>((json.userOrders || []).map((o: any) => String(o.id)));
         if (prevOrderIds.current.size > 0) {
           for (const prevId of prevOrderIds.current) {
             if (!newOrderIds.has(prevId)) {
-              // Find the filled order detail from previous data snapshot
               const filled = (json.recentTrades || []).find((t: any) => t.buyOrderId === prevId || t.sellOrderId === prevId);
-              const price = filled ? `@ ${filled.price.toFixed(2)} gold` : "";
-              emitToast({
-                type: "fill",
-                title: "Order filled ✓",
-                body: `Your order on ${ticker} was executed ${price}`.trim(),
-              });
+              if (filled) {
+                emitToast({
+                  type: "fill",
+                  title: "Order filled ✓",
+                  body: `Your order on ${ticker} was executed @ ${Number(filled.price).toFixed(2)} gold`,
+                });
+              }
             }
           }
         }
@@ -395,7 +395,32 @@ function Terminal({ ticker }: { ticker: string }) {
                               ? `Paid ${fmtUtcDate(r.distributedAt || r.scheduledFor)}`
                               : r.status === "CANCELLED"
                               ? "Cancelled"
-                              : `Due ${fmtUtcDate(r.scheduledFor)}`}
+                              : (
+                                <span className="inline-flex items-center gap-2">
+                                  <span>{`Due ${fmtUtcDate(r.scheduledFor)}`}</span>
+                                  {canFound && (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const res = await fetch("/api/dividends", {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ action: "cancel_report", reportId: r.id }),
+                                        });
+                                        const d = await res.json();
+                                        emitToast({ type: d.success ? "fill" : "error", title: d.success ? "Report cancelled" : "Error", body: d.message });
+                                        if (d.success) {
+                                          lastBody.current = "";
+                                          load();
+                                        }
+                                      }}
+                                      className="text-[11px] text-bear hover:underline cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  )}
+                                </span>
+                              )}
                           </td>
                         </tr>
                       ))}
