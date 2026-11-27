@@ -30,7 +30,6 @@ import TermsModal from "./TermsModal";
 import DepositAdjustmentModal from "./DepositAdjustmentModal";
 import DCLiquidationModal from "./DCLiquidationModal";
 import NotificationsModal from "./NotificationsModal";
-import AcquisitionNoticeModal from "./AcquisitionNoticeModal";
 import { FloorClock } from "./FloorClock";
 import { CoinMark } from "./CoinMark";
 import { useMarketFeed, refreshMarketFeed } from "@/hooks/useMarketFeed";
@@ -47,20 +46,8 @@ function NavbarInner({ onUserRefresh }: { onUserRefresh?: () => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isDcDecreeOpen, setIsDcDecreeOpen] = useState(false);
-  const [isAcquisitionOpen, setIsAcquisitionOpen] = useState(false);
   const [pulseNote, setPulseNote] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  // Automatically show the acquisition notice once per browser session
-  useEffect(() => {
-    try {
-      const seen = sessionStorage.getItem("gug_acq_notice_seen");
-      if (!seen) {
-        setIsAcquisitionOpen(true);
-        sessionStorage.setItem("gug_acq_notice_seen", "1");
-      }
-    } catch {}
-  }, []);
 
   // Close the account menu on outside click or Escape
   useEffect(() => {
@@ -146,18 +133,6 @@ function NavbarInner({ onUserRefresh }: { onUserRefresh?: () => void }) {
             <span>The exchange floor is <strong>CLOSED</strong> due to the <strong>World War</strong>. All trading operations are suspended until further notice.</span>
           </div>
         )}
-        {/* Acquisition & Operator Handover Top Banner */}
-        <div 
-          onClick={() => setIsAcquisitionOpen(true)}
-          className="w-full bg-gradient-to-r from-amber-950/90 via-zinc-900 to-amber-950/90 border-b border-amber-500/40 text-amber-200 text-[11px] sm:text-[12px] py-1.5 px-3 sm:px-4 flex items-center justify-center gap-2 text-center font-medium shadow-md backdrop-blur-sm cursor-pointer hover:bg-zinc-800/90 transition-colors"
-        >
-          <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
-          <strong className="text-amber-300 font-bold uppercase tracking-wider">OFFICIAL NOTICE:</strong>
-          <span className="hidden sm:inline">Grow Ur Gold is actively seeking an institutional buyer or operator handover. All citizen assets remain 100% safeguarded.</span>
-          <span className="sm:hidden">GUG Seeking Acquisition / Operator Handover.</span>
-          <span className="underline text-amber-300 font-semibold ml-1 text-[10px] sm:text-[11px]">View Terms &rarr;</span>
-        </div>
-
         <header className="h-12 border-b border-rule bg-floor">
           <div className="h-full px-3 sm:px-4 flex items-center gap-4">
           <Link href="/" className="flex items-center gap-2 shrink-0" aria-label="Grow Ur Gold, markets">
@@ -427,12 +402,6 @@ function NavbarInner({ onUserRefresh }: { onUserRefresh?: () => void }) {
       <DCLiquidationModal
         isOpen={isDcDecreeOpen}
         onClose={() => setIsDcDecreeOpen(false)}
-      />
-
-      {/* Acquisition & Operator Handover Notice Modal */}
-      <AcquisitionNoticeModal
-        isOpen={isAcquisitionOpen}
-        onClose={() => setIsAcquisitionOpen(false)}
       />
     </>
   );
