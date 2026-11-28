@@ -5,7 +5,7 @@ import { ShieldCheck, ArrowRight, ExternalLink, ServerCog } from "lucide-react";
 import { CoinMark } from "./CoinMark";
 
 // Set to the new live URL once confirmed (e.g. "https://new-gug-domain.vercel.app"), or leave null to keep disabled.
-const NEW_SITE_URL: string | null = null;
+const NEW_SITE_URL: string | null = "https://gug.civilations.com/";
 
 // Legacy deployment hostnames that should show the transition landing screen.
 // Any new deployment domain (or localhost) bypasses this screen automatically.
@@ -42,18 +42,18 @@ export default function TransitionScreen() {
             </span>
           </div>
           <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-[11px] font-bold uppercase tracking-widest text-amber-400">
-            <ServerCog className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: "6s" }} />
-            Deployment Migrating
+            <ServerCog className="w-3.5 h-3.5" />
+            {NEW_SITE_URL ? "Exchange Relocated" : "Deployment Migrating"}
           </span>
         </div>
 
         {/* Main Explanation */}
         <div className="space-y-3">
           <h1 className="text-xl sm:text-2xl font-bold text-zinc-50 tracking-tight">
-            This Exchange Deployment Is Offline for Handover
+            {NEW_SITE_URL ? "Grow Ur Gold Has Moved to a New Home" : "This Exchange Deployment Is Offline for Handover"}
           </h1>
           <p className="text-[13px] sm:text-sm text-zinc-400 leading-relaxed">
-            Grow Ur Gold has officially transitioned to new leadership (<strong className="text-zinc-200">Avemon</strong> &amp; <strong className="text-zinc-200">Dinomite</strong>) and is currently migrating infrastructure and databases to a new dedicated deployment.
+            Grow Ur Gold has officially transitioned to new leadership (<strong className="text-zinc-200">Avemon</strong> &amp; <strong className="text-zinc-200">Dinomite</strong>) and is now operating on its new dedicated deployment.
           </p>
         </div>
 
@@ -90,7 +90,9 @@ export default function TransitionScreen() {
           )}
 
           <p className="text-[11px] text-zinc-500">
-            The redirect button will activate as soon as the new deployment link is confirmed.
+            {NEW_SITE_URL
+              ? "Click above to log into the new live exchange at gug.civilations.com."
+              : "The redirect button will activate as soon as the new deployment link is confirmed."}
           </p>
         </div>
 
